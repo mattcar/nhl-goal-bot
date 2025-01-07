@@ -13,7 +13,7 @@ let previousScores = {};
 async function startBot() {
   try {
     await bot.login({
-      identifier: 'nhl-goal-bot.bsky.social', // Your bot's handle
+      identifier: 'nhl-goal-bot.bsky.social',
       process.env.BLUESKY_PASSWORD
     });
 
