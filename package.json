@@ -1,22 +1,19 @@
 {
   "name": "nhl-goal-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "NHL Goal Bot for Bluesky",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT", 
   "dependencies": {
-    "@skyware/bot": "^0.3.8",
-    "dotenv": "^16.4.7",
-    "fetch": "^1.1.0",
-    "node-fetch": "^2.7.0"
+    "@skyware/bot": "^0.1.3",
+    "node-fetch": "^3.3.2"
   },
   "engines": {
-    "node": "22.12.0"
-  },
-  "type": "module"
+    "node": "22.x" 
+  }
 }
