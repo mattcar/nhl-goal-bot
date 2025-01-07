@@ -4,9 +4,8 @@ globalThis.Headers = fetch.Headers;
 
 import { Bot } from '@skyware/bot';
 
-// require('dotenv').config(); // now setting the environment variables within the hosting app
 
-const bot = new Bot();
+const bot = new Bot(); // Keep this line as is
 
 let previousScores = {};
 
@@ -14,7 +13,7 @@ async function startBot() {
   try {
     await bot.login({
       identifier: 'nhl-goal-bot.bsky.social',
-      password: process.env.BLUESKY_PASSWORD
+      password: process.env.BLUESKY_PASSWORD // Access password from environment variable
     });
 
     console.log('Bot logged in!');
