@@ -126,3 +126,9 @@ async function fetchNHLScores() {
 }
 
 startBot();
+
+const port = process.env.PORT || 10000; 
+
+app.listen(port, () => {
+  console.log(`NHL Goal Bot listening on port ${port}`);
+});
