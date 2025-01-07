@@ -2,7 +2,7 @@
   "name": "nhl-goal-bot",
   "version": "1.0.0",
   "description": "NHL Goal Bot for Bluesky",
-  "main": "index.js",
+  "main": "index.mjs",
   "type": "module",
   "scripts": {
     "start": "node index.js"
