@@ -1,9 +1,9 @@
 import fetch from 'node-fetch';
+import { Bot } from '@skyware/bot';
+import http from 'http'; // Import the http module
+
 globalThis.fetch = fetch;
 globalThis.Headers = fetch.Headers;
-
-import { Bot } from '@skyware/bot';
-
 
 const bot = new Bot(); // Keep this line as is
 
@@ -127,8 +127,12 @@ async function fetchNHLScores() {
 
 startBot();
 
-const port = process.env.PORT || 10000; 
+const port = process.env.PORT || 10000;
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('NHL Goal Bot is running!');
+});
 
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`NHL Goal Bot listening on port ${port}`);
 });
