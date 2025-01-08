@@ -78,7 +78,9 @@ async function fetchNHLScores() {
                 ? data.homeTeam.abbrev
                 : data.awayTeam.abbrev;
 
+              // Include eventId in the goal object
               return {
+                eventId: play.eventId,  
                 scorer: scorer ? `${scorer.firstName.default} ${scorer.lastName.default} (#${scorer.sweaterNumber})` : 'Unknown Player',
                 assists: assist1 ? `${assist1.firstName.default} ${assist1.lastName.default} (#${assist1.sweaterNumber})` : '',
                 time: play.timeInPeriod,
@@ -95,8 +97,8 @@ async function fetchNHLScores() {
         console.log("New goals:", newGoals);
 
         for (const goal of newGoals) {
-          // Enhanced goal key with eventId
-          const goalKey = `${gameId}-${play.eventId}-${goal.scorer}-${goal.time}-${goal.period}`; 
+          // Access eventId from the goal object
+          const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time}-${goal.period}`; 
 
           if (!previousScores[goalKey]) {
             console.log("New goal detected!", goal);
