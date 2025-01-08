@@ -95,7 +95,8 @@ async function fetchNHLScores() {
         console.log("New goals:", newGoals);
 
         for (const goal of newGoals) {
-          const goalKey = `${gameId}-${goal.scorer}-${goal.time}-${goal.period}`;
+          // Enhanced goal key with eventId
+          const goalKey = `${gameId}-${play.eventId}-${goal.scorer}-${goal.time}-${goal.period}`; 
 
           if (!previousScores[goalKey]) {
             console.log("New goal detected!", goal);
@@ -111,7 +112,25 @@ async function fetchNHLScores() {
             await bot.post({ text: goalMessage });
             console.log("Goal notification posted to Bluesky!");
 
-            previousScores[goalKey] = true;
+            previousScores[goalKey] = goal; // Store the entire goal object
+          } else {
+            // Compare the new goal with the previously stored goal
+            const previousGoal = previousScores[goalKey];
+            if (goal.assists !== previousGoal.assists) { // Check if assists have been added
+              // Update the goal message with the new assists
+              goalMessage = `GOAL! 🚨 (Updated)\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
+              goalMessage += `${goal.scorer} (${goal.team}) scores!`;
+              if (goal.assists) {
+                goalMessage += `\nAssists: ${goal.assists}`;
+              }
+              goalMessage += `\nTime: ${goal.time} - ${goal.period}`;
+              goalMessage += `\nScore: ${data.awayTeam.score} - ${data.homeTeam.score}`;
+
+              await bot.post({ text: goalMessage });
+              console.log("Updated goal notification posted to Bluesky!");
+
+              previousScores[goalKey] = goal; // Update the stored goal object
+            }
           }
         }
 
