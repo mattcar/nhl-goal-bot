@@ -78,15 +78,14 @@ async function fetchNHLScores() {
                 ? data.homeTeam.abbrev
                 : data.awayTeam.abbrev;
 
-              // Include eventId and score in the goal object
               return {
-                eventId: play.eventId,  
+                eventId: play.eventId,
                 scorer: scorer ? `${scorer.firstName.default} ${scorer.lastName.default} (#${scorer.sweaterNumber})` : 'Unknown Player',
                 assists: assist1 ? `${assist1.firstName.default} ${assist1.lastName.default} (#${assist1.sweaterNumber})` : '',
                 time: play.timeInPeriod,
                 period: play.periodDescriptor.number,
                 team: scoringTeam || 'Unknown Team',
-                score: `${data.awayTeam.score} - ${data.homeTeam.score}`, // Include the score
+                score: `${data.awayTeam.score} - ${data.homeTeam.score}`,
               };
             } catch (error) {
               console.error("Error mapping goal play:", error, play);
@@ -98,15 +97,12 @@ async function fetchNHLScores() {
         console.log("New goals:", newGoals);
 
         for (const goal of newGoals) {
-          const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time}-${goal.period}`; 
+          const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time}-${goal.period}`;
+
+          let goalMessage; // Declare goalMessage here, outside the if/else blocks
 
           if (!previousScores[goalKey]) {
-            // ... (construct goalMessage) ...
-
-            await bot.post({ text: goalMessage });
-            console.log("Goal notification posted to Bluesky!");
-
-            previousScores[goalKey] = goal; // Store the entire goal object
+            // ... (construct initial goalMessage) ...
           } else {
             // Compare the new goal with the previously stored goal
             const previousGoal = previousScores[goalKey];
@@ -126,7 +122,7 @@ async function fetchNHLScores() {
             if (goal.period !== previousGoal.period) {
               updatedFields.push(`period (was ${previousGoal.period})`);
             }
-            if (goal.score !== previousGoal.score) { // Check for score change
+            if (goal.score !== previousGoal.score) {
               updatedFields.push(`score (was ${previousGoal.score})`);
             }
 
@@ -134,14 +130,14 @@ async function fetchNHLScores() {
               updateMessage += updatedFields.join(", ");
 
               // Update the goal message with the new information and the update message
-              goalMessage = `Updated Goal Info:\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
-              goalMessage += `${goal.scorer} (${goal.team}) was the scorer.`;
+              goalMessage = `Updated Goal Info:\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`; // Your updated text
+              goalMessage += `${goal.scorer} (${goal.team}) was the scorer.`; // Your updated text
               if (goal.assists) {
                 goalMessage += `\nAssists: ${goal.assists}`;
               }
               goalMessage += `\nTime: ${goal.time} - ${goal.period}`;
-              goalMessage += `\nScore: ${goal.score}`; // Use the updated score
-              goalMessage += `\n\n${updateMessage}`; // Add the update message
+              goalMessage += `\nScore: ${goal.score}`;
+              goalMessage += `\n\n${updateMessage}`;
 
               await bot.post({ text: goalMessage });
               console.log("Updated goal notification posted to Bluesky!");
