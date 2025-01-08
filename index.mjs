@@ -80,7 +80,7 @@ async function fetchNHLScores() {
 
               // Include eventId in the goal object
               return {
-                eventId: play.eventId,  
+                eventId: play.eventId,
                 scorer: scorer ? `${scorer.firstName.default} ${scorer.lastName.default} (#${scorer.sweaterNumber})` : 'Unknown Player',
                 assists: assist1 ? `${assist1.firstName.default} ${assist1.lastName.default} (#${assist1.sweaterNumber})` : '',
                 time: play.timeInPeriod,
@@ -97,7 +97,7 @@ async function fetchNHLScores() {
         console.log("New goals:", newGoals);
 
         for (const goal of newGoals) {
-          // Access eventId from the goal object
+          // Enhanced goal key with eventId
           const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time}-${goal.period}`; 
 
           if (!previousScores[goalKey]) {
@@ -118,8 +118,15 @@ async function fetchNHLScores() {
           } else {
             // Compare the new goal with the previously stored goal
             const previousGoal = previousScores[goalKey];
-            if (goal.assists !== previousGoal.assists) { // Check if assists have been added
-              // Update the goal message with the new assists
+
+            // Check for significant changes (scorer, time, or period)
+            const significantChange = 
+              goal.scorer !== previousGoal.scorer ||
+              goal.time !== previousGoal.time ||
+              goal.period !== previousGoal.period;
+
+            if (significantChange || goal.assists !== previousGoal.assists) { 
+              // Update the goal message with the new information
               goalMessage = `GOAL! 🚨 (Updated)\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
               goalMessage += `${goal.scorer} (${goal.team}) scores!`;
               if (goal.assists) {
