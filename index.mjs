@@ -78,14 +78,15 @@ async function fetchNHLScores() {
                 ? data.homeTeam.abbrev
                 : data.awayTeam.abbrev;
 
-              // Include eventId in the goal object
+              // Include eventId and score in the goal object
               return {
-                eventId: play.eventId,
+                eventId: play.eventId,  
                 scorer: scorer ? `${scorer.firstName.default} ${scorer.lastName.default} (#${scorer.sweaterNumber})` : 'Unknown Player',
                 assists: assist1 ? `${assist1.firstName.default} ${assist1.lastName.default} (#${assist1.sweaterNumber})` : '',
                 time: play.timeInPeriod,
                 period: play.periodDescriptor.number,
                 team: scoringTeam || 'Unknown Team',
+                score: `${data.awayTeam.score} - ${data.homeTeam.score}`, // Include the score
               };
             } catch (error) {
               console.error("Error mapping goal play:", error, play);
@@ -97,19 +98,10 @@ async function fetchNHLScores() {
         console.log("New goals:", newGoals);
 
         for (const goal of newGoals) {
-          // Enhanced goal key with eventId
           const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time}-${goal.period}`; 
 
           if (!previousScores[goalKey]) {
-            console.log("New goal detected!", goal);
-
-            let goalMessage = `GOAL! 🚨\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
-            goalMessage += `${goal.scorer} (${goal.team}) scores!`;
-            if (goal.assists) {
-              goalMessage += `\nAssists: ${goal.assists}`;
-            }
-            goalMessage += `\nTime: ${goal.time} - ${goal.period}`;
-            goalMessage += `\nScore: ${data.awayTeam.score} - ${data.homeTeam.score}`;
+            // ... (construct goalMessage) ...
 
             await bot.post({ text: goalMessage });
             console.log("Goal notification posted to Bluesky!");
@@ -119,21 +111,37 @@ async function fetchNHLScores() {
             // Compare the new goal with the previously stored goal
             const previousGoal = previousScores[goalKey];
 
-            // Check for significant changes (scorer, time, or period)
-            const significantChange = 
-              goal.scorer !== previousGoal.scorer ||
-              goal.time !== previousGoal.time ||
-              goal.period !== previousGoal.period;
+            // Check for changes and construct an update message
+            let updateMessage = "UPDATE: ";
+            const updatedFields = [];
+            if (goal.scorer !== previousGoal.scorer) {
+              updatedFields.push(`scorer (was ${previousGoal.scorer})`);
+            }
+            if (goal.assists !== previousGoal.assists) {
+              updatedFields.push(`assists (were ${previousGoal.assists || 'none'})`);
+            }
+            if (goal.time !== previousGoal.time) {
+              updatedFields.push(`time (was ${previousGoal.time})`);
+            }
+            if (goal.period !== previousGoal.period) {
+              updatedFields.push(`period (was ${previousGoal.period})`);
+            }
+            if (goal.score !== previousGoal.score) { // Check for score change
+              updatedFields.push(`score (was ${previousGoal.score})`);
+            }
 
-            if (significantChange || goal.assists !== previousGoal.assists) { 
-              // Update the goal message with the new information
-              goalMessage = `GOAL! 🚨 (Updated)\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
-              goalMessage += `${goal.scorer} (${goal.team}) scores!`;
+            if (updatedFields.length > 0) {
+              updateMessage += updatedFields.join(", ");
+
+              // Update the goal message with the new information and the update message
+              goalMessage = `Updated Goal Info:\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
+              goalMessage += `${goal.scorer} (${goal.team}) was the scorer.`;
               if (goal.assists) {
                 goalMessage += `\nAssists: ${goal.assists}`;
               }
               goalMessage += `\nTime: ${goal.time} - ${goal.period}`;
-              goalMessage += `\nScore: ${data.awayTeam.score} - ${data.homeTeam.score}`;
+              goalMessage += `\nScore: ${goal.score}`; // Use the updated score
+              goalMessage += `\n\n${updateMessage}`; // Add the update message
 
               await bot.post({ text: goalMessage });
               console.log("Updated goal notification posted to Bluesky!");
