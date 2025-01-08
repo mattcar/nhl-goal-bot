@@ -37,11 +37,14 @@ async function fetchNHLScores() {
       week.games.filter(game => game.gameState === 'LIVE').map(game => game.id)
     );
 
-    console.log("Live game IDs:", liveGameIds);
+    console.log("Live game IDs:", liveGameIds); 
 
     for (const gameId of liveGameIds) {
       try {
         const response = await fetch(`https://api-web.nhle.com/v1/gamecenter/${gameId}/play-by-play`);
+
+        // Log the response status to check for API errors
+        console.log(`Fetch response status for game ${gameId}:`, response.status, response.statusText); 
 
         const contentType = response.headers.get('Content-Type');
         if (!contentType || !contentType.includes('application/json')) {
@@ -53,22 +56,18 @@ async function fetchNHLScores() {
 
         const data = await response.json();
 
-        console.log(`Play-by-play data for game ${gameId}:`, data);
-
         console.log("Filtering for goals...");
 
         const newGoals = data.plays
           .filter(play => {
             const isGoal = play.typeDescKey === 'goal' && play.details?.scoringPlayerId;
-            console.log(`Checking play with eventId ${play.eventId}: isGoal = ${isGoal}`);
             if (isGoal) {
-              console.log("Goal play found:", play);
+              console.log("Goal play found:", play); 
             }
             return isGoal;
           })
           .map(play => {
             try {
-              console.log("Mapping goal play:", play);
               const { scoringPlayerId, assist1PlayerId, eventOwnerTeamId } = play.details;
 
               const scorer = data.rosterSpots.find(player => player.playerId === scoringPlayerId);
@@ -94,20 +93,37 @@ async function fetchNHLScores() {
           })
           .filter(goal => goal !== null);
 
-        console.log("New goals:", newGoals);
+        console.log("New goals:", newGoals); 
 
         for (const goal of newGoals) {
           const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time}-${goal.period}`;
 
-          let goalMessage; // Declare goalMessage here, outside the if/else blocks
+          let goalMessage;
 
           if (!previousScores[goalKey]) {
-            // ... (construct initial goalMessage) ...
+            console.log("New goal detected!", goal);
+
+            goalMessage = `GOAL! 🚨\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
+            goalMessage += `${goal.scorer} (${goal.team}) scores!`;
+            if (goal.assists) {
+              goalMessage += `\nAssists: ${goal.assists}`;
+            }
+            goalMessage += `\nTime: ${goal.time} - ${goal.period}`;
+            goalMessage += `\nScore: ${goal.score}`; 
+
+            // Log the attempt to post to Bluesky and the response
+            try {
+              console.log("Attempting to post to Bluesky:", goalMessage);
+              const postResponse = await bot.post({ text: goalMessage });
+              console.log("Bluesky post response:", postResponse); 
+            } catch (error) {
+              console.error("Error posting to Bluesky:", error);
+            }
+
+            previousScores[goalKey] = goal; 
           } else {
-            // Compare the new goal with the previously stored goal
             const previousGoal = previousScores[goalKey];
 
-            // Check for changes and construct an update message
             let updateMessage = "UPDATE: ";
             const updatedFields = [];
             if (goal.scorer !== previousGoal.scorer) {
@@ -129,9 +145,8 @@ async function fetchNHLScores() {
             if (updatedFields.length > 0) {
               updateMessage += updatedFields.join(", ");
 
-              // Update the goal message with the new information and the update message
-              goalMessage = `Updated Goal Info:\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`; // Your updated text
-              goalMessage += `${goal.scorer} (${goal.team}) was the scorer.`; // Your updated text
+              goalMessage = `Updated Goal Info:\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`; 
+              goalMessage += `${goal.scorer} (${goal.team}) was the scorer.`; 
               if (goal.assists) {
                 goalMessage += `\nAssists: ${goal.assists}`;
               }
@@ -139,10 +154,16 @@ async function fetchNHLScores() {
               goalMessage += `\nScore: ${goal.score}`;
               goalMessage += `\n\n${updateMessage}`;
 
-              await bot.post({ text: goalMessage });
-              console.log("Updated goal notification posted to Bluesky!");
+              // Log the attempt to post to Bluesky and the response
+              try {
+                console.log("Attempting to post to Bluesky:", goalMessage);
+                const postResponse = await bot.post({ text: goalMessage });
+                console.log("Bluesky post response:", postResponse); 
+              } catch (error) {
+                console.error("Error posting to Bluesky:", error);
+              }
 
-              previousScores[goalKey] = goal; // Update the stored goal object
+              previousScores[goalKey] = goal; 
             }
           }
         }
