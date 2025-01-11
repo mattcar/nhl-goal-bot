@@ -98,9 +98,8 @@ async function fetchNHLScores() {
               return {
                 eventId: play.eventId,
                 scorer: scorer ? `${scorer.firstName.default} ${scorer.lastName.default} (#${scorer.sweaterNumber})` : 'Unknown Player',
-                assists: assists, // Include all assists
+                assists: assists, 
                 time: play.timeInPeriod,
-                // Handle playoff period formatting
                 period: play.periodDescriptor.periodType === 'REGULAR' 
                         ? play.periodDescriptor.number 
                         : play.periodDescriptor.periodType, 
@@ -117,39 +116,71 @@ async function fetchNHLScores() {
         console.log("New goals:", newGoals); 
 
         for (const goal of newGoals) {
-          const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time}-${goal.period}-${goal.team}-${goal.score}`;
-
-          let goalMessage;
+          // Ignores seconds in time for goalKey
+          const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time.substring(0, 5)}-${goal.period}-${goal.team}-${goal.score}`;
 
           if (!previousScores[goalKey]) {
             console.log("New goal detected!", goal);
 
-            goalMessage = `GOAL! 🚨\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
-            goalMessage += `${goal.scorer} (${goal.team}) scores!`;
-            if (goal.assists) {
-              goalMessage += `\nAssists: ${goal.assists}`;
+            // Initial delay before posting (45 seconds)
+            await new Promise(resolve => setTimeout(resolve, 45000)); 
+
+            // Re-fetch the play-by-play data after the delay
+            const updatedResponse = await fetch(`https://api-web.nhle.com/v1/gamecenter/${gameId}/play-by-play`);
+            const updatedData = await updatedResponse.json();
+
+            // Find the updated goal data in the re-fetched data
+            const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
+
+            if (updatedGoalPlay) {
+              // If the goal still exists, map it again to get potentially updated details
+              const updatedGoal = { 
+                eventId: updatedGoalPlay.eventId,
+                scorer: updatedGoalPlay.details?.scoringPlayerId ? updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).firstName.default + " " + updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).lastName.default + " (#" + updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).sweaterNumber + ")" : 'Unknown Player',
+                assists: (updatedGoalPlay.details.assists || [])
+                  .map(assist => {
+                    const assister = updatedData.rosterSpots.find(player => player.playerId === assist.playerId);
+                    return assister ? `${assister.firstName.default} ${assister.lastName.default} (#${assister.sweaterNumber})` : 'Unknown Player';
+                  })
+                  .join(', '), 
+                time: updatedGoalPlay.timeInPeriod,
+                period: updatedGoalPlay.periodDescriptor.periodType === 'REGULAR' 
+                        ? updatedGoalPlay.periodDescriptor.number 
+                        : updatedGoalPlay.periodDescriptor.periodType, 
+                team: updatedGoalPlay.details.eventOwnerTeamId === updatedData.homeTeam.id
+                        ? updatedData.homeTeam.abbrev
+                        : updatedData.awayTeam.abbrev,
+                score: `${updatedData.awayTeam.score} - ${updatedData.homeTeam.score}`,
+              };
+
+              // Now use updatedGoal for posting and storing in previousScores
+              let goalMessage = `GOAL! 🚨\n${updatedData.awayTeam.abbrev} vs. ${updatedData.homeTeam.abbrev}\n`;
+              goalMessage += `${updatedGoal.scorer} (${updatedGoal.team}) scores!`;
+              if (updatedGoal.assists) {
+                goalMessage += `\nAssists: ${updatedGoal.assists}`;
+              }
+              goalMessage += `\nTime: ${updatedGoal.time} - ${updatedGoal.period}`;
+              goalMessage += `\nScore: ${updatedGoal.score}`; 
+
+              try {
+                console.log("Attempting to post to Bluesky:", goalMessage);
+                const postResponse = await bot.post({ text: goalMessage });
+                console.log("Bluesky post response:", postResponse); 
+              } catch (error) {
+                console.error("Error posting to Bluesky:", error);
+              }
+
+              previousScores[goalKey] = { goal: updatedGoal, updateCount: 0 }; 
+            } else {
+              console.log("Goal no longer found in updated data. Skipping.");
             }
-            goalMessage += `\nTime: ${goal.time} - ${goal.period}`;
-            goalMessage += `\nScore: ${goal.score}`; 
 
-            try {
-              console.log("Attempting to post to Bluesky:", goalMessage);
-              const postResponse = await bot.post({ text: goalMessage });
-              console.log("Bluesky post response:", postResponse); 
-            } catch (error) {
-              console.error("Error posting to Bluesky:", error);
-            }
-
-            // Initialize goal data with update count
-            previousScores[goalKey] = { goal: goal, updateCount: 0 }; 
-
-            // Introduce a delay of 3 minutes before checking for updates
-            await new Promise(resolve => setTimeout(resolve, 180000)); 
+            // Introduce a longer delay after posting
+            await new Promise(resolve => setTimeout(resolve, 180000)); // 3 minutes
 
           } else {
             previousScores[goalKey].updateCount++;
 
-            // Allow up to 2 updates
             if (previousScores[goalKey].updateCount <= 2) { 
               const previousGoal = previousScores[goalKey].goal;
 
@@ -161,9 +192,10 @@ async function fetchNHLScores() {
               if (goal.assists !== previousGoal.assists) {
                 updatedFields.push(`assists (were ${previousGoal.assists || 'none'})`);
               }
-              if (goal.time !== previousGoal.time) {
-                updatedFields.push(`time (was ${previousGoal.time})`);
-              }
+              // Ignore time updates
+              // if (goal.time !== previousGoal.time) {
+              //   updatedFields.push(`time (was ${previousGoal.time})`);
+              // }
               if (goal.period !== previousGoal.period) {
                 updatedFields.push(`period (was ${previousGoal.period})`);
               }
@@ -174,7 +206,7 @@ async function fetchNHLScores() {
               if (updatedFields.length > 0) {
                 updateMessage += updatedFields.join(", ");
 
-                goalMessage = `Updated Goal Info:\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`; 
+                let goalMessage = `Updated Goal Info:\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`; 
                 goalMessage += `${goal.scorer} (${goal.team}) was the scorer.`; 
                 if (goal.assists) {
                   goalMessage += `\nAssists: ${goal.assists}`;
