@@ -93,7 +93,7 @@ async function fetchNHLScores() {
               const scorer = data.rosterSpots.find(player => player.playerId === scoringPlayerId);
 
               // Handle multiple assists
-              const assists = (play.details.assists || []) // Access assists array directly
+              const assists = (play.details.assists || [])
                 .map(assist => {
                   const assister = data.rosterSpots.find(player => player.playerId === assist.playerId);
                   return assister ? `${assister.firstName.default} ${assister.lastName.default} (#${assister.sweaterNumber})` : 'Unknown Player';
@@ -110,8 +110,8 @@ async function fetchNHLScores() {
                 assists: assists,
                 time: play.timeInPeriod,
                 period: play.periodDescriptor.periodType === 'REG'
-                  ? play.periodDescriptor.number // Use period number for regulation
-                  : play.periodDescriptor.periodType, // Use periodType (OT, SO) for non-regulation
+                  ? play.periodDescriptor.number
+                  : play.periodDescriptor.periodType,
                 team: scoringTeam || 'Unknown Team',
                 score: `${data.awayTeam.score} - ${data.homeTeam.score}`,
               };
@@ -125,6 +125,7 @@ async function fetchNHLScores() {
         console.log("New goals:", newGoals);
 
         for (const goal of newGoals) {
+          // Corrected goalKey (includes period)
           const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time.substring(0, 5)}-${goal.period}-${goal.team}-${goal.score}`;
 
           if (!previousScores[goalKey]) {
@@ -145,7 +146,7 @@ async function fetchNHLScores() {
               const updatedGoal = {
                 eventId: updatedGoalPlay.eventId,
                 scorer: updatedGoalPlay.details?.scoringPlayerId ? updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).firstName.default + " " + updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).lastName.default + " (#" + updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).sweaterNumber + ")" : 'Unknown Player',
-                assists: (updatedGoalPlay.details.assists || []) // Access assists array directly
+                assists: (updatedGoalPlay.details.assists || [])
                   .map(assist => {
                     const assister = updatedData.rosterSpots.find(player => player.playerId === assist.playerId);
                     return assister ? `${assister.firstName.default} ${assister.lastName.default} (#${assister.sweaterNumber})` : 'Unknown Player';
@@ -167,7 +168,7 @@ async function fetchNHLScores() {
               if (updatedGoal.assists) {
                 goalMessage += `\nAssists: ${updatedGoal.assists}`;
               }
-              goalMessage += `\nTime: ${updatedGoal.time} - ${updatedGoal.period}`; // Use updatedGoal.period
+              goalMessage += `\nTime: ${updatedGoal.time} - ${updatedGoal.period}`;
               goalMessage += `\nScore: ${updatedGoal.score}`;
 
               // Additional logging for circular error
@@ -176,10 +177,7 @@ async function fetchNHLScores() {
 
               try {
                 console.log("Attempting to post to Bluesky:", goalMessage);
-
-                // *** Convert goalMessage to plain string before posting ***
-                const postResponse = await bot.post({ text: JSON.stringify(goalMessage) }); 
-
+                const postResponse = await bot.post({ text: JSON.stringify(goalMessage) }); // Convert to string
                 console.log("Bluesky post response:", postResponse);
               } catch (error) {
                 console.error("Error posting to Bluesky:", error);
@@ -204,7 +202,53 @@ async function fetchNHLScores() {
             await new Promise(resolve => setTimeout(resolve, 180000)); // 3 minutes
 
           } else {
-            // ... (update checking logic with time difference check removed)
+            previousScores[goalKey].updateCount++;
+
+            if (previousScores[goalKey].updateCount <= 2) {
+              const previousGoal = previousScores[goalKey].goal;
+
+              let updateMessage = "UPDATE: ";
+              const updatedFields = [];
+              if (goal.scorer !== previousGoal.scorer) {
+                updatedFields.push(`scorer (was ${previousGoal.scorer})`);
+              }
+              if (goal.assists !== previousGoal.assists) {
+                updatedFields.push(`assists (were ${previousGoal.assists || 'none'})`);
+              }
+              // Ignore time updates
+              // if (goal.time !== previousGoal.time) {
+              //   updatedFields.push(`time (was ${previousGoal.time})`);
+              // }
+              if (goal.period !== previousGoal.period) {
+                updatedFields.push(`period (was ${previousGoal.period})`);
+              }
+              if (goal.score !== previousGoal.score) {
+                updatedFields.push(`score (was ${previousGoal.score})`);
+              }
+
+              if (updatedFields.length > 0) {
+                updateMessage += updatedFields.join(", ");
+
+                let goalMessage = `Updated Goal Info:\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
+                goalMessage += `${goal.scorer} (${goal.team}) was the scorer.`;
+                if (goal.assists) {
+                  goalMessage += `\nAssists: ${goal.assists}`;
+                }
+                goalMessage += `\nTime: ${goal.time} - ${goal.period}`;
+                goalMessage += `\nScore: ${goal.score}`;
+                goalMessage += `\n\n${updateMessage}`;
+
+                try {
+                  console.log("Attempting to post to Bluesky:", goalMessage);
+                  const postResponse = await bot.post({ text: JSON.stringify(goalMessage) }); // Convert to string
+                  console.log("Bluesky post response:", postResponse);
+                } catch (error) {
+                  console.error("Error posting to Bluesky:", error);
+                }
+
+                previousScores[goalKey].goal = goal;
+              }
+            }
           }
         }
 
@@ -217,6 +261,7 @@ async function fetchNHLScores() {
     console.error('Error fetching NHL schedule:', error);
   }
 }
+
 
 // Start the bot
 startBot();
