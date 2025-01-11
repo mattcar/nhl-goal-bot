@@ -93,7 +93,7 @@ async function fetchNHLScores() {
               const scorer = data.rosterSpots.find(player => player.playerId === scoringPlayerId);
 
               // Handle multiple assists
-              const assists = (play.details.assists || [])
+              const assists = (play.details.assists || []) // Access assists array directly
                 .map(assist => {
                   const assister = data.rosterSpots.find(player => player.playerId === assist.playerId);
                   return assister ? `${assister.firstName.default} ${assister.lastName.default} (#${assister.sweaterNumber})` : 'Unknown Player';
@@ -145,7 +145,7 @@ async function fetchNHLScores() {
               const updatedGoal = {
                 eventId: updatedGoalPlay.eventId,
                 scorer: updatedGoalPlay.details?.scoringPlayerId ? updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).firstName.default + " " + updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).lastName.default + " (#" + updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).sweaterNumber + ")" : 'Unknown Player',
-                assists: (updatedGoalPlay.details.assists || [])
+                assists: (updatedGoalPlay.details.assists || []) // Access assists array directly
                   .map(assist => {
                     const assister = updatedData.rosterSpots.find(player => player.playerId === assist.playerId);
                     return assister ? `${assister.firstName.default} ${assister.lastName.default} (#${assister.sweaterNumber})` : 'Unknown Player';
@@ -176,7 +176,10 @@ async function fetchNHLScores() {
 
               try {
                 console.log("Attempting to post to Bluesky:", goalMessage);
-                const postResponse = await bot.post({ text: goalMessage });
+
+                // *** Convert goalMessage to plain string before posting ***
+                const postResponse = await bot.post({ text: JSON.stringify(goalMessage) }); 
+
                 console.log("Bluesky post response:", postResponse);
               } catch (error) {
                 console.error("Error posting to Bluesky:", error);
