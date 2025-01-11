@@ -122,8 +122,16 @@ function processGoalPlay(play, data) {
       throw new Error("Invalid play.details structure");
     }
 
-    const { scoringPlayerId, eventOwnerTeamId, assists = [] } = play.details;
+    const { scoringPlayerId, eventOwnerTeamId, assists = [], awayScore, homeScore } = play.details;
     const scorer = data.rosterSpots.find(player => player.playerId === scoringPlayerId);
+
+    // Log score details for debugging
+    console.log(`Processing goal - Scores from play details:`, {
+      awayScore: play.details.awayScore,
+      homeScore: play.details.homeScore,
+      timeInPeriod: play.timeInPeriod,
+      period: play.periodDescriptor.number
+    });
 
     const processedAssists = assists
       .map(assist => {
@@ -145,14 +153,17 @@ function processGoalPlay(play, data) {
         ? play.periodDescriptor.number
         : play.periodDescriptor.periodType,
       team: scoringTeam || 'Unknown Team',
-      score: `${data.awayTeam.score} - ${data.homeTeam.score}`,
+      score: `${play.details.awayScore} - ${play.details.homeScore}`, // Get scores from play.details
+      rawScores: { 
+        away: play.details.awayScore, 
+        home: play.details.homeScore 
+      }
     };
   } catch (error) {
     console.error("Error processing goal play:", error.message);
     return null;
   }
 }
-
 async function handleGoalUpdate(gameId, goal, teams) {
   try {
     const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time.substring(0, 5)}-${goal.period}-${goal.team}-${goal.score}`;
