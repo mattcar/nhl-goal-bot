@@ -2,20 +2,233 @@ import fetch from 'node-fetch';
 import { Bot } from '@skyware/bot';
 import http from 'http';
 
+// Configuration
+const config = {
+  INITIAL_DELAY: 45000,
+  POST_DELAY: 180000,
+  MAX_UPDATES: 2,
+  POLL_INTERVAL: 60000,
+  API_BASE_URL: 'https://api-web.nhle.com/v1',
+};
+
+// Validate environment variables
+if (!process.env.BLUESKY_PASSWORD) {
+  throw new Error('BLUESKY_PASSWORD environment variable is required');
+}
+
 globalThis.fetch = fetch;
 globalThis.Headers = fetch.Headers;
 
 const bot = new Bot();
-
 let previousScores = {};
 
-// Hash function
+// Utility functions
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function safeStringify(obj) {
+  try {
+    const cache = new WeakSet();
+    return JSON.stringify(obj, (key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        if (cache.has(value)) {
+          return '[Circular Reference]';
+        }
+        cache.add(value);
+      }
+      return value;
+    });
+  } catch (error) {
+    return '[Unable to stringify]';
+  }
+}
+
 function hashCode(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = str.charCodeAt(i) + ((hash << 5) - hash);
   }
   return hash;
+}
+
+function cleanupOldScores() {
+  const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+  Object.keys(previousScores).forEach(key => {
+    if (previousScores[key].timestamp < oneDayAgo) {
+      delete previousScores[key];
+    }
+  });
+}
+
+// Message formatting
+function formatGoalMessage(goal, teams, isUpdate = false) {
+  let message = isUpdate ? 'Updated Goal Info:\n' : 'GOAL! 🚨\n';
+  message += `${teams.away} vs. ${teams.home}\n`;
+  message += `${goal.scorer} (${goal.team}) ${isUpdate ? 'was' : 'is'} the scorer!`;
+  if (goal.assists) {
+    message += `\nAssists: ${goal.assists}`;
+  }
+  message += `\nTime: ${goal.time} - ${goal.period}`;
+  message += `\nScore: ${goal.score}`;
+  return message;
+}
+
+// Data validation
+function validateGameData(data) {
+  if (!data?.plays || !Array.isArray(data.plays)) {
+    throw new Error('Invalid game data structure');
+  }
+  return data;
+}
+
+// API functions
+async function fetchNHLSchedule() {
+  try {
+    const response = await fetch(`${config.API_BASE_URL}/schedule/now`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching NHL schedule:', error.message);
+    throw error;
+  }
+}
+
+async function fetchGamePlayByPlay(gameId) {
+  try {
+    const response = await fetch(`${config.API_BASE_URL}/gamecenter/${gameId}/play-by-play`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const contentType = response.headers.get('Content-Type');
+    if (!contentType || !contentType.includes('application/json')) {
+      throw new Error(`Unexpected Content-Type: ${contentType}`);
+    }
+
+    const data = await response.json();
+    return validateGameData(data);
+  } catch (error) {
+    console.error(`Error fetching play-by-play for game ${gameId}:`, error.message);
+    throw error;
+  }
+}
+
+// Goal processing
+function processGoalPlay(play, data) {
+  try {
+    if (!play.details) {
+      throw new Error("Invalid play.details structure");
+    }
+
+    const { scoringPlayerId, eventOwnerTeamId, assists = [] } = play.details;
+    const scorer = data.rosterSpots.find(player => player.playerId === scoringPlayerId);
+
+    const processedAssists = assists
+      .map(assist => {
+        const assister = data.rosterSpots.find(player => player.playerId === assist.playerId);
+        return assister ? `${assister.firstName.default} ${assister.lastName.default} (#${assister.sweaterNumber})` : 'Unknown Player';
+      })
+      .join(', ');
+
+    const scoringTeam = eventOwnerTeamId === data.homeTeam.id
+      ? data.homeTeam.abbrev
+      : data.awayTeam.abbrev;
+
+    return {
+      eventId: play.eventId,
+      scorer: scorer ? `${scorer.firstName.default} ${scorer.lastName.default} (#${scorer.sweaterNumber})` : 'Unknown Player',
+      assists: processedAssists,
+      time: play.timeInPeriod,
+      period: play.periodDescriptor.periodType === 'REG'
+        ? play.periodDescriptor.number
+        : play.periodDescriptor.periodType,
+      team: scoringTeam || 'Unknown Team',
+      score: `${data.awayTeam.score} - ${data.homeTeam.score}`,
+    };
+  } catch (error) {
+    console.error("Error processing goal play:", error.message);
+    return null;
+  }
+}
+
+async function handleGoalUpdate(gameId, goal, teams) {
+  try {
+    const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time.substring(0, 5)}-${goal.period}-${goal.team}-${goal.score}`;
+
+    if (!previousScores[goalKey]) {
+      console.log("New goal detected:", safeStringify(goal));
+
+      await delay(config.INITIAL_DELAY);
+
+      try {
+        const updatedData = await fetchGamePlayByPlay(gameId);
+        const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
+
+        if (updatedGoalPlay) {
+          const updatedGoal = processGoalPlay(updatedGoalPlay, updatedData);
+          if (!updatedGoal) {
+            console.error("Failed to process updated goal");
+            return;
+          }
+
+          const message = formatGoalMessage(updatedGoal, teams);
+          console.log("Attempting to post message:", message);
+
+          try {
+            await bot.post({ text: message });
+            console.log("Successfully posted goal to Bluesky");
+          } catch (error) {
+            console.error("Error posting to Bluesky:", error.message);
+            return;
+          }
+
+          previousScores[goalKey] = {
+            goal: updatedGoal,
+            updateCount: 0,
+            hash: hashCode(safeStringify(updatedGoal)),
+            timestamp: Date.now()
+          };
+
+          await delay(config.POST_DELAY);
+        } else {
+          console.log("Goal no longer found in updated data");
+        }
+      } catch (error) {
+        console.error("Error processing goal update:", error.message);
+      }
+    } else {
+      previousScores[goalKey].updateCount++;
+
+      if (previousScores[goalKey].updateCount <= config.MAX_UPDATES) {
+        const previousGoal = previousScores[goalKey].goal;
+        const updatedFields = getUpdatedFields(goal, previousGoal);
+
+        if (updatedFields.length > 0) {
+          const message = formatGoalMessage(goal, teams, true);
+          try {
+            await bot.post({ text: message });
+            console.log("Successfully posted goal update to Bluesky");
+            previousScores[goalKey].goal = goal;
+          } catch (error) {
+            console.error("Error posting update to Bluesky:", error.message);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error in handleGoalUpdate for game ${gameId}:`, error.message);
+  }
+}
+
+function getUpdatedFields(newGoal, oldGoal) {
+  const updatedFields = [];
+  if (newGoal.scorer !== oldGoal.scorer) updatedFields.push('scorer');
+  if (newGoal.assists !== oldGoal.assists) updatedFields.push('assists');
+  if (newGoal.period !== oldGoal.period) updatedFields.push('period');
+  if (newGoal.score !== oldGoal.score) updatedFields.push('score');
+  return updatedFields;
 }
 
 async function startBot() {
@@ -25,250 +238,65 @@ async function startBot() {
       password: process.env.BLUESKY_PASSWORD
     });
 
-    console.log('Bot logged in!');
+    console.log('Bot successfully logged in');
 
-    while (true) {
-      console.log("Fetching NHL scores at", new Date());
-      await fetchNHLScores();
-      await new Promise(resolve => setTimeout(resolve, 60000));
-    }
-  } catch (error) {
-    console.error('Error logging in or fetching scores:', error);
-  }
-}
-
-async function fetchNHLScores() {
-  try {
-    const scheduleResponse = await fetch('https://api-web.nhle.com/v1/schedule/now');
-    const scheduleData = await scheduleResponse.json();
-
-    const liveGameIds = scheduleData.gameWeek.flatMap(week =>
-      week.games.filter(game => game.gameState === 'LIVE').map(game => game.id)
-    );
-
-    console.log("Live game IDs:", liveGameIds);
-
-    for (const gameId of liveGameIds) {
+    const pollGames = async () => {
       try {
-        const response = await fetch(`https://api-web.nhle.com/v1/gamecenter/${gameId}/play-by-play`);
+        console.log("Fetching NHL scores at", new Date().toISOString());
+        const scheduleData = await fetchNHLSchedule();
 
-        console.log(`Fetch response status for game ${gameId}:`, response.status, response.statusText);
+        const liveGameIds = scheduleData.gameWeek.flatMap(week =>
+          week.games.filter(game => game.gameState === 'LIVE').map(game => game.id)
+        );
 
-        const contentType = response.headers.get('Content-Type');
-        if (!contentType || !contentType.includes('application/json')) {
-          console.error(`Error: Unexpected Content-Type for play-by-play data ${gameId}: ${contentType}`);
-          const responseText = await response.text();
-          console.log(responseText);
-          continue;
-        }
+        console.log("Live game IDs:", liveGameIds);
 
-        const data = await response.json();
+        for (const gameId of liveGameIds) {
+          try {
+            const data = await fetchGamePlayByPlay(gameId);
+            const teams = {
+              home: data.homeTeam.abbrev,
+              away: data.awayTeam.abbrev
+            };
 
-        // Data validation: Check for 'plays' array
-        if (!Array.isArray(data.plays)) {
-          console.error("Error: 'plays' array not found in API response:", data);
-          continue;
-        }
+            const newGoals = data.plays
+              .filter(play => play.typeDescKey === 'goal' && play.details?.scoringPlayerId)
+              .map(play => processGoalPlay(play, data))
+              .filter(goal => goal !== null);
 
-        console.log("Filtering for goals...");
-
-        const newGoals = data.plays
-          .filter(play => {
-            const isGoal = play.typeDescKey === 'goal' && play.details?.scoringPlayerId;
-            if (isGoal) {
-              console.log("Goal play found:", play);
+            for (const goal of newGoals) {
+              await handleGoalUpdate(gameId, goal, teams);
             }
-            return isGoal;
-          })
-          .map(play => {
-            try {
-              // Data validation: Check play.details structure
-              if (!play.details) {
-                console.error("Error: Invalid 'play.details' structure:", play);
-                return null;
-              }
-
-              const { scoringPlayerId, eventOwnerTeamId } = play.details;
-
-              const scorer = data.rosterSpots.find(player => player.playerId === scoringPlayerId);
-
-              // Handle multiple assists
-              const assists = (play.details.assists || [])
-                .map(assist => {
-                  const assister = data.rosterSpots.find(player => player.playerId === assist.playerId);
-                  return assister ? `${assister.firstName.default} ${assister.lastName.default} (#${assister.sweaterNumber})` : 'Unknown Player';
-                })
-                .join(', ');
-
-              const scoringTeam = eventOwnerTeamId === data.homeTeam.id
-                ? data.homeTeam.abbrev
-                : data.awayTeam.abbrev;
-
-              return {
-                eventId: play.eventId,
-                scorer: scorer ? `${scorer.firstName.default} ${scorer.lastName.default} (#${scorer.sweaterNumber})` : 'Unknown Player',
-                assists: assists,
-                time: play.timeInPeriod,
-                period: play.periodDescriptor.periodType === 'REG'
-                  ? play.periodDescriptor.number
-                  : play.periodDescriptor.periodType,
-                team: scoringTeam || 'Unknown Team',
-                score: `${data.awayTeam.score} - ${data.homeTeam.score}`,
-              };
-            } catch (error) {
-              console.error("Error mapping goal play:", error, play);
-              return null;
-            }
-          })
-          .filter(goal => goal !== null);
-
-        console.log("New goals:", newGoals);
-
-        for (const goal of newGoals) {
-          // Corrected goalKey (includes period)
-          const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time.substring(0, 5)}-${goal.period}-${goal.team}-${goal.score}`;
-
-          if (!previousScores[goalKey]) {
-            console.log("New goal detected!", goal);
-
-            // Initial delay before posting (45 seconds)
-            await new Promise(resolve => setTimeout(resolve, 45000));
-
-            // Re-fetch the play-by-play data after the delay
-            const updatedResponse = await fetch(`https://api-web.nhle.com/v1/gamecenter/${gameId}/play-by-play`);
-            const updatedData = await updatedResponse.json();
-
-            // Find the updated goal data in the re-fetched data
-            const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
-
-            if (updatedGoalPlay) {
-              // If the goal still exists, map it again to get potentially updated details
-              const updatedGoal = {
-                eventId: updatedGoalPlay.eventId,
-                scorer: updatedGoalPlay.details?.scoringPlayerId ? updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).firstName.default + " " + updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).lastName.default + " (#" + updatedData.rosterSpots.find(player => player.playerId === updatedGoalPlay.details.scoringPlayerId).sweaterNumber + ")" : 'Unknown Player',
-                assists: (updatedGoalPlay.details.assists || [])
-                  .map(assist => {
-                    const assister = updatedData.rosterSpots.find(player => player.playerId === assist.playerId);
-                    return assister ? `${assister.firstName.default} ${assister.lastName.default} (#${assister.sweaterNumber})` : 'Unknown Player';
-                  })
-                  .join(', '),
-                time: updatedGoalPlay.timeInPeriod,
-                period: updatedGoalPlay.periodDescriptor.periodType === 'REG'
-                  ? updatedGoalPlay.periodDescriptor.number
-                  : updatedGoalPlay.periodDescriptor.periodType,
-                team: updatedGoalPlay.details.eventOwnerTeamId === updatedData.homeTeam.id
-                  ? updatedData.homeTeam.abbrev
-                  : updatedData.awayTeam.abbrev,
-                score: `${updatedData.awayTeam.score} - ${updatedData.homeTeam.score}`,
-              };
-
-              // Now use updatedGoal for posting and storing in previousScores
-              let goalMessage = `GOAL! 🚨\n${updatedData.awayTeam.abbrev} vs. ${updatedData.homeTeam.abbrev}\n`;
-              goalMessage += `${updatedGoal.scorer} (${updatedGoal.team}) scores!`;
-              if (updatedGoal.assists) {
-                goalMessage += `\nAssists: ${updatedGoal.assists}`;
-              }
-              goalMessage += `\nTime: ${updatedGoal.time} - ${updatedGoal.period}`;
-              goalMessage += `\nScore: ${updatedGoal.score}`;
-
-              // Additional logging for circular error
-              console.log("goalMessage:", goalMessage);
-              console.log("bot:", bot);
-
-              try {
-                console.log("Attempting to post to Bluesky:", goalMessage);
-                const postResponse = await bot.post({ text: JSON.stringify(goalMessage) }); // Convert to string
-                console.log("Bluesky post response:", postResponse);
-              } catch (error) {
-                console.error("Error posting to Bluesky:", error);
-              }
-
-              // Generate hash of the entire goal object (excluding time)
-              const goalDataHash = hashCode(JSON.stringify({
-                eventId: updatedGoal.eventId,
-                scorer: updatedGoal.scorer,
-                assists: updatedGoal.assists,
-                period: updatedGoal.period,
-                team: updatedGoal.team,
-                score: updatedGoal.score
-              }));
-
-              previousScores[goalKey] = { goal: updatedGoal, updateCount: 0, hash: goalDataHash };
-            } else {
-              console.log("Goal no longer found in updated data. Skipping.");
-            }
-
-            // Introduce a longer delay after posting
-            await new Promise(resolve => setTimeout(resolve, 180000)); // 3 minutes
-
-          } else {
-            previousScores[goalKey].updateCount++;
-
-            if (previousScores[goalKey].updateCount <= 2) {
-              const previousGoal = previousScores[goalKey].goal;
-
-              let updateMessage = "UPDATE: ";
-              const updatedFields = [];
-              if (goal.scorer !== previousGoal.scorer) {
-                updatedFields.push(`scorer (was ${previousGoal.scorer})`);
-              }
-              if (goal.assists !== previousGoal.assists) {
-                updatedFields.push(`assists (were ${previousGoal.assists || 'none'})`);
-              }
-              // Ignore time updates
-              // if (goal.time !== previousGoal.time) {
-              //   updatedFields.push(`time (was ${previousGoal.time})`);
-              // }
-              if (goal.period !== previousGoal.period) {
-                updatedFields.push(`period (was ${previousGoal.period})`);
-              }
-              if (goal.score !== previousGoal.score) {
-                updatedFields.push(`score (was ${previousGoal.score})`);
-              }
-
-              if (updatedFields.length > 0) {
-                updateMessage += updatedFields.join(", ");
-
-                let goalMessage = `Updated Goal Info:\n${data.awayTeam.abbrev} vs. ${data.homeTeam.abbrev}\n`;
-                goalMessage += `${goal.scorer} (${goal.team}) was the scorer.`;
-                if (goal.assists) {
-                  goalMessage += `\nAssists: ${goal.assists}`;
-                }
-                goalMessage += `\nTime: ${goal.time} - ${goal.period}`;
-                goalMessage += `\nScore: ${goal.score}`;
-                goalMessage += `\n\n${updateMessage}`;
-
-                try {
-                  console.log("Attempting to post to Bluesky:", goalMessage);
-                  const postResponse = await bot.post({ text: JSON.stringify(goalMessage) }); // Convert to string
-                  console.log("Bluesky post response:", postResponse);
-                } catch (error) {
-                  console.error("Error posting to Bluesky:", error);
-                }
-
-                previousScores[goalKey].goal = goal;
-              }
-            }
+          } catch (error) {
+            console.error(`Error processing game ${gameId}:`, error.message);
           }
         }
 
+        cleanupOldScores();
       } catch (error) {
-        console.error(`Error fetching data for game ${gameId}:`, error);
+        console.error('Error in poll cycle:', error.message);
       }
-    }
+    };
 
+    setInterval(pollGames, config.POLL_INTERVAL);
+    pollGames(); // Initial poll
   } catch (error) {
-    console.error('Error fetching NHL schedule:', error);
+    console.error('Error logging in:', error.message);
   }
 }
 
 // Start the bot
 startBot();
 
-// Keep the bot running with an HTTP server
+// HTTP Server
 const port = process.env.PORT || 10000;
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.writeHead(200, {
+    'Content-Type': 'text/plain',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "default-src 'none'"
+  });
   res.end('NHL Goal Bot is running!');
 });
 
