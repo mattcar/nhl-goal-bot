@@ -42,12 +42,8 @@ function safeStringify(obj) {
   }
 }
 
-function hashCode(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return hash;
+function createGoalKey(gameId, goal) {
+  return `${gameId}-${goal.eventId}-${goal.period}-${goal.time}`;
 }
 
 function cleanupOldScores() {
@@ -122,7 +118,7 @@ function processGoalPlay(play, data) {
       throw new Error("Invalid play.details structure");
     }
 
-    const { scoringPlayerId, eventOwnerTeamId, assists = [], awayScore, homeScore } = play.details;
+    const { scoringPlayerId, eventOwnerTeamId, assists = [] } = play.details;
     const scorer = data.rosterSpots.find(player => player.playerId === scoringPlayerId);
 
     // Log score details for debugging
@@ -153,10 +149,10 @@ function processGoalPlay(play, data) {
         ? play.periodDescriptor.number
         : play.periodDescriptor.periodType,
       team: scoringTeam || 'Unknown Team',
-      score: `${play.details.awayScore} - ${play.details.homeScore}`, // Get scores from play.details
-      rawScores: { 
-        away: play.details.awayScore, 
-        home: play.details.homeScore 
+      score: `${play.details.awayScore} - ${play.details.homeScore}`,
+      rawScores: {
+        away: play.details.awayScore,
+        home: play.details.homeScore
       }
     };
   } catch (error) {
@@ -164,69 +160,73 @@ function processGoalPlay(play, data) {
     return null;
   }
 }
+
 async function handleGoalUpdate(gameId, goal, teams) {
   try {
-    const goalKey = `${gameId}-${goal.eventId}-${goal.scorer}-${goal.time.substring(0, 5)}-${goal.period}-${goal.team}-${goal.score}`;
+    const goalKey = createGoalKey(gameId, goal);
+    
+    // Add debug logging to track goal processing
+    console.log(`Processing goal with key: ${goalKey}`, {
+      exists: !!previousScores[goalKey],
+      updateCount: previousScores[goalKey]?.updateCount || 0,
+      isPosted: previousScores[goalKey]?.posted || false
+    });
 
     if (!previousScores[goalKey]) {
-      console.log("New goal detected:", safeStringify(goal));
+      // Add timestamp for when we first saw this goal
+      const now = Date.now();
+      previousScores[goalKey] = {
+        firstSeen: now,
+        posted: false,
+        updateCount: 0,
+        timestamp: now,
+        goal: goal
+      };
 
+      console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`);
       await delay(config.INITIAL_DELAY);
 
       try {
+        // Verify the goal still exists after delay
         const updatedData = await fetchGamePlayByPlay(gameId);
         const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
 
-        if (updatedGoalPlay) {
-          const updatedGoal = processGoalPlay(updatedGoalPlay, updatedData);
-          if (!updatedGoal) {
-            console.error("Failed to process updated goal");
-            return;
-          }
-
-          const message = formatGoalMessage(updatedGoal, teams);
+        if (updatedGoalPlay && !previousScores[goalKey].posted) {
+          const message = formatGoalMessage(goal, teams);
           console.log("Attempting to post message:", message);
 
-          try {
-            await bot.post({ text: message });
-            console.log("Successfully posted goal to Bluesky");
-          } catch (error) {
-            console.error("Error posting to Bluesky:", error.message);
-            return;
-          }
-
-          previousScores[goalKey] = {
-            goal: updatedGoal,
-            updateCount: 0,
-            hash: hashCode(safeStringify(updatedGoal)),
-            timestamp: Date.now()
-          };
-
+          await bot.post({ text: message });
+          console.log(`Successfully posted goal ${goalKey}`);
+          
+          // Mark as posted
+          previousScores[goalKey].posted = true;
           await delay(config.POST_DELAY);
         } else {
-          console.log("Goal no longer found in updated data");
+          console.log(`Goal ${goalKey} was either already posted or no longer exists`);
         }
       } catch (error) {
-        console.error("Error processing goal update:", error.message);
+        console.error(`Error posting goal ${goalKey}:`, error.message);
+        // Remove the goal from previousScores if posting failed
+        delete previousScores[goalKey];
       }
-    } else {
+    } else if (previousScores[goalKey].posted && previousScores[goalKey].updateCount < config.MAX_UPDATES) {
+      // Handle updates for already posted goals
       previousScores[goalKey].updateCount++;
+      const previousGoal = previousScores[goalKey].goal;
+      const updatedFields = getUpdatedFields(goal, previousGoal);
 
-      if (previousScores[goalKey].updateCount <= config.MAX_UPDATES) {
-        const previousGoal = previousScores[goalKey].goal;
-        const updatedFields = getUpdatedFields(goal, previousGoal);
-
-        if (updatedFields.length > 0) {
-          const message = formatGoalMessage(goal, teams, true);
-          try {
-            await bot.post({ text: message });
-            console.log("Successfully posted goal update to Bluesky");
-            previousScores[goalKey].goal = goal;
-          } catch (error) {
-            console.error("Error posting update to Bluesky:", error.message);
-          }
+      if (updatedFields.length > 0) {
+        const message = formatGoalMessage(goal, teams, true);
+        try {
+          await bot.post({ text: message });
+          console.log(`Successfully posted update for goal ${goalKey}`);
+          previousScores[goalKey].goal = goal;
+        } catch (error) {
+          console.error(`Error posting update for goal ${goalKey}:`, error.message);
         }
       }
+    } else {
+      console.log(`Skipping goal ${goalKey} - already processed or max updates reached`);
     }
   } catch (error) {
     console.error(`Error in handleGoalUpdate for game ${gameId}:`, error.message);
