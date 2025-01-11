@@ -262,7 +262,6 @@ async function fetchNHLScores() {
   }
 }
 
-
 // Start the bot
 startBot();
 
