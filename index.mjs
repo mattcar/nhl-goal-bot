@@ -109,9 +109,9 @@ async function fetchNHLScores() {
                 scorer: scorer ? `${scorer.firstName.default} ${scorer.lastName.default} (#${scorer.sweaterNumber})` : 'Unknown Player',
                 assists: assists,
                 time: play.timeInPeriod,
-                period: play.periodDescriptor.periodType === 'REGULAR'
+                period: play.periodDescriptor.periodType === 'REG'
                   ? play.periodDescriptor.number
-                  : play.periodDescriptor.periodType,
+                  : play.periodDescriptor.periodType, // Use periodType (OT, SO) for non-regulation
                 team: scoringTeam || 'Unknown Team',
                 score: `${data.awayTeam.score} - ${data.homeTeam.score}`,
               };
@@ -168,7 +168,7 @@ async function fetchNHLScores() {
               if (updatedGoal.assists) {
                 goalMessage += `\nAssists: ${updatedGoal.assists}`;
               }
-              goalMessage += `\nTime: ${updatedGoal.time} - ${updatedGoal.period}`;
+              goalMessage += `\nTime: ${updatedGoal.time} - ${updatedGoal.period}`; // Use updatedGoal.period
               goalMessage += `\nScore: ${updatedGoal.score}`;
 
               // Additional logging for circular error
@@ -215,9 +215,10 @@ async function fetchNHLScores() {
               if (goal.assists !== previousGoal.assists) {
                 updatedFields.push(`assists (were ${previousGoal.assists || 'none'})`);
               }
-              if (goal.time !== previousGoal.time) {
-                updatedFields.push(`time (was ${previousGoal.time})`);
-              }
+              // Ignore time updates
+              // if (goal.time !== previousGoal.time) {
+              //   updatedFields.push(`time (was ${previousGoal.time})`);
+              // }
               if (goal.period !== previousGoal.period) {
                 updatedFields.push(`period (was ${previousGoal.period})`);
               }
