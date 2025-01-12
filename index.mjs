@@ -43,7 +43,8 @@ function safeStringify(obj) {
 }
 
 function createGoalKey(gameId, goal) {
-  return `${gameId}-${goal.eventId}-${goal.period}-${goal.time}`;
+  const minutes = goal.time.split(':')[0];
+  return `${gameId}-${goal.eventId}-${goal.scorer}-${goal.period}-${minutes}-${goal.rawScores.away}-${goal.rawScores.home}`;
 }
 
 function cleanupOldScores() {
@@ -164,7 +165,39 @@ function processGoalPlay(play, data) {
 async function handleGoalUpdate(gameId, goal, teams) {
   try {
     const goalKey = createGoalKey(gameId, goal);
+    const goalMinute = goal.time.split(':')[0];
+    const goalPeriod = goal.period;
     
+    // Check for existing goals that are the same except for seconds
+    const isDuplicate = Object.entries(previousScores).some(([key, value]) => {
+      if (key.startsWith(gameId) && value.posted) {
+        const prevGoal = value.goal;
+        const prevMinute = prevGoal.time.split(':')[0];
+        
+        // Only consider it a duplicate if it's the same:
+        // - period
+        // - minute
+        // - scorer
+        // - score
+        return prevGoal.period === goalPeriod && 
+               prevMinute === goalMinute && 
+               prevGoal.scorer === goal.scorer &&
+               prevGoal.rawScores.away === goal.rawScores.away &&
+               prevGoal.rawScores.home === goal.rawScores.home;
+      }
+      return false;
+    });
+
+    if (isDuplicate) {
+      console.log(`Skipping duplicate goal/time update:`, {
+        period: goalPeriod,
+        minute: goalMinute,
+        scorer: goal.scorer,
+        score: `${goal.rawScores.away}-${goal.rawScores.home}`
+      });
+      return;
+    }
+
     // Add debug logging to track goal processing
     console.log(`Processing goal with key: ${goalKey}`, {
       exists: !!previousScores[goalKey],
