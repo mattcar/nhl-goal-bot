@@ -275,14 +275,60 @@ function getUpdatedFields(newGoal, oldGoal) {
   return updatedFields;
 }
 
-async function startBot() {
-  try {
-    await bot.login({
-      identifier: 'nhl-goal-bot.bsky.social',
-      password: process.env.BLUESKY_PASSWORD
-    });
+async function attemptLogin(maxRetries = 5, delayBetweenRetries = 30000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await bot.login({
+        identifier: 'nhl-goal-bot.bsky.social',
+        password: process.env.BLUESKY_PASSWORD
+      });
+      console.log('Bot successfully logged in');
+      return true;
+    } catch (error) {
+      console.error(`Login attempt ${attempt} failed:`, error.message);
+      
+      if (attempt === maxRetries) {
+        console.error('Max login attempts reached, giving up');
+        throw error;
+      }
+      
+      console.log(`Waiting ${delayBetweenRetries/1000} seconds before retrying...`);
+      await delay(delayBetweenRetries);
+    }
+  }
+  return false;
+}
 
-    console.log('Bot successfully logged in');
+async function startBot() {
+  async function attemptLogin(maxRetries = 5, delayBetweenRetries = 30000) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await bot.login({
+          identifier: 'nhl-goal-bot.bsky.social',
+          password: process.env.BLUESKY_PASSWORD
+        });
+        console.log('Bot successfully logged in');
+        return true;
+      } catch (error) {
+        console.error(`Login attempt ${attempt} failed:`, error.message);
+        
+        if (attempt === maxRetries) {
+          console.error('Max login attempts reached, giving up');
+          throw error;
+        }
+        
+        console.log(`Waiting ${delayBetweenRetries/1000} seconds before retrying...`);
+        await delay(delayBetweenRetries);
+      }
+    }
+    return false;
+  }
+
+  try {
+    const loginSuccess = await attemptLogin();
+    if (!loginSuccess) {
+      throw new Error('Failed to login after maximum retries');
+    }
 
     const pollGames = async () => {
       try {
@@ -319,13 +365,42 @@ async function startBot() {
         cleanupOldScores();
       } catch (error) {
         console.error('Error in poll cycle:', error.message);
+        // If we get a login error during polling, attempt to re-login
+        if (error.message.includes('Failed to fetch') || 
+            error.message.includes('Upstream Failure') || 
+            error.status === 502) {
+          console.log('Connection issue detected, attempting to re-login...');
+          try {
+            await attemptLogin(3, 10000); // Fewer retries and shorter delay for mid-operation reconnect
+          } catch (loginError) {
+            console.error('Failed to re-login:', loginError.message);
+            // Continue with the next poll cycle anyway
+          }
+        }
       }
     };
 
-    setInterval(pollGames, config.POLL_INTERVAL);
-    pollGames(); // Initial poll
+    // Set up polling interval
+    let pollInterval = setInterval(pollGames, config.POLL_INTERVAL);
+
+    // Handle process termination
+    process.on('SIGTERM', () => {
+      console.log('SIGTERM received, cleaning up...');
+      clearInterval(pollInterval);
+      process.exit(0);
+    });
+
+    process.on('SIGINT', () => {
+      console.log('SIGINT received, cleaning up...');
+      clearInterval(pollInterval);
+      process.exit(0);
+    });
+
+    // Start initial poll
+    await pollGames();
   } catch (error) {
-    console.error('Error logging in:', error.message);
+    console.error('Fatal error starting bot:', error.message);
+    process.exit(1);
   }
 }
 
