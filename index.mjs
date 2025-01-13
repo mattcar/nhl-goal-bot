@@ -9,6 +9,7 @@ const config = {
   MAX_UPDATES: 2,
   POLL_INTERVAL: 60000,
   API_BASE_URL: 'https://api-web.nhle.com/v1',
+  SCORE_MAX_AGE: 6 * 60 * 60 * 1000, // 6 hours in milliseconds
 };
 
 // Validate environment variables
@@ -24,6 +25,14 @@ let previousScores = {};
 
 // Utility functions
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function isToday(timestamp) {
+  const today = new Date();
+  const date = new Date(timestamp);
+  return date.getDate() === today.getDate() &&
+    date.getMonth() === today.getMonth() &&
+    date.getFullYear() === today.getFullYear();
+}
 
 function safeStringify(obj) {
   try {
@@ -48,12 +57,25 @@ function createGoalKey(gameId, goal) {
 }
 
 function cleanupOldScores() {
-  const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+  const now = Date.now();
+  const initialCount = Object.keys(previousScores).length;
+  
   Object.keys(previousScores).forEach(key => {
-    if (previousScores[key].timestamp < oneDayAgo) {
+    // Remove scores older than 6 hours or from a different day
+    if (!isToday(previousScores[key].timestamp) || 
+        (now - previousScores[key].timestamp) > config.SCORE_MAX_AGE) {
+      console.log(`Removing old goal: ${key}`, {
+        age: Math.round((now - previousScores[key].timestamp) / 1000 / 60) + ' minutes',
+        wasToday: isToday(previousScores[key].timestamp)
+      });
       delete previousScores[key];
     }
   });
+
+  const finalCount = Object.keys(previousScores).length;
+  if (initialCount !== finalCount) {
+    console.log(`Cleaned up ${initialCount - finalCount} old goals. ${finalCount} remaining.`);
+  }
 }
 
 // Message formatting
@@ -165,20 +187,22 @@ function processGoalPlay(play, data) {
 async function handleGoalUpdate(gameId, goal, teams) {
   try {
     const goalKey = createGoalKey(gameId, goal);
+    
+    // Check if this goal exists in previousScores and is from a different day
+    if (previousScores[goalKey] && !isToday(previousScores[goalKey].timestamp)) {
+      console.log(`Removing old goal entry for ${goalKey} from a different day`);
+      delete previousScores[goalKey];
+    }
+
     const goalMinute = goal.time.split(':')[0];
     const goalPeriod = goal.period;
     
     // Check for existing goals that are the same except for seconds
     const isDuplicate = Object.entries(previousScores).some(([key, value]) => {
-      if (key.startsWith(gameId) && value.posted) {
+      if (key.startsWith(gameId) && value.posted && isToday(value.timestamp)) {
         const prevGoal = value.goal;
         const prevMinute = prevGoal.time.split(':')[0];
         
-        // Only consider it a duplicate if it's the same:
-        // - period
-        // - minute
-        // - scorer
-        // - score
         return prevGoal.period === goalPeriod && 
                prevMinute === goalMinute && 
                prevGoal.scorer === goal.scorer &&
@@ -198,7 +222,6 @@ async function handleGoalUpdate(gameId, goal, teams) {
       return;
     }
 
-    // Add debug logging to track goal processing
     console.log(`Processing goal with key: ${goalKey}`, {
       exists: !!previousScores[goalKey],
       updateCount: previousScores[goalKey]?.updateCount || 0,
@@ -206,7 +229,6 @@ async function handleGoalUpdate(gameId, goal, teams) {
     });
 
     if (!previousScores[goalKey]) {
-      // Add timestamp for when we first saw this goal
       const now = Date.now();
       previousScores[goalKey] = {
         firstSeen: now,
@@ -220,7 +242,6 @@ async function handleGoalUpdate(gameId, goal, teams) {
       await delay(config.INITIAL_DELAY);
 
       try {
-        // Verify the goal still exists after delay
         const updatedData = await fetchGamePlayByPlay(gameId);
         const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
 
@@ -231,19 +252,20 @@ async function handleGoalUpdate(gameId, goal, teams) {
           await bot.post({ text: message });
           console.log(`Successfully posted goal ${goalKey}`);
           
-          // Mark as posted
           previousScores[goalKey].posted = true;
+          previousScores[goalKey].timestamp = Date.now(); // Update timestamp after successful post
           await delay(config.POST_DELAY);
         } else {
           console.log(`Goal ${goalKey} was either already posted or no longer exists`);
+          delete previousScores[goalKey];
         }
       } catch (error) {
         console.error(`Error posting goal ${goalKey}:`, error.message);
-        // Remove the goal from previousScores if posting failed
         delete previousScores[goalKey];
       }
-    } else if (previousScores[goalKey].posted && previousScores[goalKey].updateCount < config.MAX_UPDATES) {
-      // Handle updates for already posted goals
+    } else if (previousScores[goalKey].posted && 
+               previousScores[goalKey].updateCount < config.MAX_UPDATES && 
+               isToday(previousScores[goalKey].timestamp)) {
       previousScores[goalKey].updateCount++;
       const previousGoal = previousScores[goalKey].goal;
       const updatedFields = getUpdatedFields(goal, previousGoal);
@@ -254,6 +276,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
           await bot.post({ text: message });
           console.log(`Successfully posted update for goal ${goalKey}`);
           previousScores[goalKey].goal = goal;
+          previousScores[goalKey].timestamp = Date.now();
         } catch (error) {
           console.error(`Error posting update for goal ${goalKey}:`, error.message);
         }
@@ -275,34 +298,15 @@ function getUpdatedFields(newGoal, oldGoal) {
   return updatedFields;
 }
 
-async function attemptLogin(maxRetries = 5, delayBetweenRetries = 30000) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      await bot.login({
-        identifier: 'nhl-goal-bot.bsky.social',
-        password: process.env.BLUESKY_PASSWORD
-      });
-      console.log('Bot successfully logged in');
-      return true;
-    } catch (error) {
-      console.error(`Login attempt ${attempt} failed:`, error.message);
-      
-      if (attempt === maxRetries) {
-        console.error('Max login attempts reached, giving up');
-        throw error;
-      }
-      
-      console.log(`Waiting ${delayBetweenRetries/1000} seconds before retrying...`);
-      await delay(delayBetweenRetries);
-    }
-  }
-  return false;
-}
-
 async function startBot() {
+  // Clear previousScores at startup
+  previousScores = {};
+  console.log('Cleared previous scores at startup');
+
   async function attemptLogin(maxRetries = 5, delayBetweenRetries = 30000) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        console.log(`Attempting login (attempt ${attempt}/${maxRetries})...`);
         await bot.login({
           identifier: 'nhl-goal-bot.bsky.social',
           password: process.env.BLUESKY_PASSWORD
@@ -310,115 +314,129 @@ async function startBot() {
         console.log('Bot successfully logged in');
         return true;
       } catch (error) {
-        console.error(`Login attempt ${attempt} failed:`, error.message);
+        const isUpstreamError = 
+          error.message.includes('Upstream') || 
+          error.message.includes('Failed to fetch') ||
+          (error.status === 502);
+
+        console.error(`Login attempt ${attempt} failed:`, {
+          message: error.message,
+          status: error.status,
+          error: error.error,
+          isUpstreamError
+        });
         
         if (attempt === maxRetries) {
-          console.error('Max login attempts reached, giving up');
-          throw error;
+          console.error('Max login attempts reached, will restart process');
+          process.exit(1);
         }
         
-        console.log(`Waiting ${delayBetweenRetries/1000} seconds before retrying...`);
-        await delay(delayBetweenRetries);
+        const nextDelay = isUpstreamError ? delayBetweenRetries * 2 : delayBetweenRetries;
+        console.log(`Waiting ${nextDelay/1000} seconds before retrying...`);
+        await delay(nextDelay);
       }
     }
     return false;
   }
 
-  try {
-    const loginSuccess = await attemptLogin();
-    if (!loginSuccess) {
-      throw new Error('Failed to login after maximum retries');
-    }
+  while (true) {
+    try {
+      const loginSuccess = await attemptLogin();
+      if (!loginSuccess) {
+        throw new Error('Failed to login after maximum retries');
+      }
 
-    const pollGames = async () => {
-      try {
-        console.log("Fetching NHL scores at", new Date().toISOString());
-        const scheduleData = await fetchNHLSchedule();
+      const pollGames = async () => {
+        try {
+          console.log("Fetching NHL scores at", new Date().toISOString());
+          const scheduleData = await fetchNHLSchedule();
 
-        const liveGameIds = scheduleData.gameWeek.flatMap(week =>
-          week.games.filter(game => game.gameState === 'LIVE').map(game => game.id)
-        );
+          const liveGameIds = scheduleData.gameWeek.flatMap(week =>
+            week.games.filter(game => game.gameState === 'LIVE').map(game => game.id)
+          );
 
-        console.log("Live game IDs:", liveGameIds);
+          if (liveGameIds.length > 0) {
+            console.log("Live game IDs:", liveGameIds);
+          }
 
-        for (const gameId of liveGameIds) {
-          try {
-            const data = await fetchGamePlayByPlay(gameId);
-            const teams = {
-              home: data.homeTeam.abbrev,
-              away: data.awayTeam.abbrev
-            };
+          for (const gameId of liveGameIds) {
+            try {
+              const data = await fetchGamePlayByPlay(gameId);
+              const teams = {
+                home: data.homeTeam.abbrev,
+                away: data.awayTeam.abbrev
+              };
 
-            const newGoals = data.plays
-              .filter(play => play.typeDescKey === 'goal' && play.details?.scoringPlayerId)
-              .map(play => processGoalPlay(play, data))
-              .filter(goal => goal !== null);
+              const newGoals = data.plays
+                .filter(play => play.typeDescKey === 'goal' && play.details?.scoringPlayerId)
+                .map(play => processGoalPlay(play, data))
+                .filter(goal => goal !== null);
 
-            for (const goal of newGoals) {
-              await handleGoalUpdate(gameId, goal, teams);
+              for (const goal of newGoals) {
+                await handleGoalUpdate(gameId, goal, teams);
+              }
+            } catch (error) {
+              console.error(`Error processing game ${gameId}:`, error.message);
             }
-          } catch (error) {
-            console.error(`Error processing game ${gameId}:`, error.message);
           }
-        }
 
-        cleanupOldScores();
-      } catch (error) {
-        console.error('Error in poll cycle:', error.message);
-        // If we get a login error during polling, attempt to re-login
-        if (error.message.includes('Failed to fetch') || 
-            error.message.includes('Upstream Failure') || 
-            error.status === 502) {
-          console.log('Connection issue detected, attempting to re-login...');
-          try {
-            await attemptLogin(3, 10000); // Fewer retries and shorter delay for mid-operation reconnect
-          } catch (loginError) {
-            console.error('Failed to re-login:', loginError.message);
-            // Continue with the next poll cycle anyway
-          }
+          cleanupOldScores();
+        } catch (error) {
+          console.error('Error in poll cycle:', error.message);
+          if (error.message.includes('Failed to fetch') || 
+              error.message.includes('Upstream') || 
+              error.status === 502) {
+                console.log('Connection issue detected, restarting bot...');
+                throw error; // This will trigger process restart
+              }
+            }
+          };
+    
+          // Set up polling interval
+          let pollInterval = setInterval(pollGames, config.POLL_INTERVAL);
+    
+          // Handle process termination
+          process.on('SIGTERM', () => {
+            console.log('SIGTERM received, cleaning up...');
+            clearInterval(pollInterval);
+            process.exit(0);
+          });
+    
+          process.on('SIGINT', () => {
+            console.log('SIGINT received, cleaning up...');
+            clearInterval(pollInterval);
+            process.exit(0);
+          });
+    
+          // Start initial poll
+          await pollGames();
+    
+          // If we get here without error, break the while loop
+          break;
+    
+        } catch (error) {
+          console.error('Fatal error, restarting bot in 60 seconds:', error.message);
+          await delay(60000);
+          // Continue while loop to restart the whole process
         }
       }
-    };
-
-    // Set up polling interval
-    let pollInterval = setInterval(pollGames, config.POLL_INTERVAL);
-
-    // Handle process termination
-    process.on('SIGTERM', () => {
-      console.log('SIGTERM received, cleaning up...');
-      clearInterval(pollInterval);
-      process.exit(0);
+    }
+    
+    // Start the bot
+    startBot();
+    
+    // HTTP Server
+    const port = process.env.PORT || 10000;
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'text/plain',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Content-Security-Policy': "default-src 'none'"
+      });
+      res.end('NHL Goal Bot is running!');
     });
-
-    process.on('SIGINT', () => {
-      console.log('SIGINT received, cleaning up...');
-      clearInterval(pollInterval);
-      process.exit(0);
+    
+    server.listen(port, () => {
+      console.log(`NHL Goal Bot listening on port ${port}`);
     });
-
-    // Start initial poll
-    await pollGames();
-  } catch (error) {
-    console.error('Fatal error starting bot:', error.message);
-    process.exit(1);
-  }
-}
-
-// Start the bot
-startBot();
-
-// HTTP Server
-const port = process.env.PORT || 10000;
-const server = http.createServer((req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/plain',
-    'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options': 'DENY',
-    'Content-Security-Policy': "default-src 'none'"
-  });
-  res.end('NHL Goal Bot is running!');
-});
-
-server.listen(port, () => {
-  console.log(`NHL Goal Bot listening on port ${port}`);
-});
