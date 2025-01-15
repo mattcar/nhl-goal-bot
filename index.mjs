@@ -190,7 +190,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
     
     // Check if this goal exists in previousScores and is from a different day
     if (previousScores[goalKey] && !isToday(previousScores[goalKey].timestamp)) {
-      console.log(`Removing old goal entry for ${goalKey} from a different day`);
+      console.log(`Found stale goal from previous day, removing: ${goalKey}`);
       delete previousScores[goalKey];
     }
 
@@ -225,7 +225,8 @@ async function handleGoalUpdate(gameId, goal, teams) {
     console.log(`Processing goal with key: ${goalKey}`, {
       exists: !!previousScores[goalKey],
       updateCount: previousScores[goalKey]?.updateCount || 0,
-      isPosted: previousScores[goalKey]?.posted || false
+      isPosted: previousScores[goalKey]?.posted || false,
+      timestamp: previousScores[goalKey]?.timestamp ? new Date(previousScores[goalKey].timestamp).toISOString() : null
     });
 
     if (!previousScores[goalKey]) {
@@ -271,7 +272,17 @@ async function handleGoalUpdate(gameId, goal, teams) {
       const updatedFields = getUpdatedFields(goal, previousGoal);
 
       if (updatedFields.length > 0) {
-        const message = formatGoalMessage(goal, teams, true);
+        let message = 'CORRECTION: ';
+        if (updatedFields.includes('scorer')) {
+          message += `Goal now credited to ${goal.scorer} (previously ${previousGoal.scorer})\n`;
+        }
+        message += `${teams.away} vs. ${teams.home}\n`;
+        if (goal.assists) {
+          message += `Assists: ${goal.assists}\n`;
+        }
+        message += `Time: ${goal.time} - ${goal.period}\n`;
+        message += `Score: ${goal.score}`;
+
         try {
           await bot.post({ text: message });
           console.log(`Successfully posted update for goal ${goalKey}`);
@@ -281,8 +292,11 @@ async function handleGoalUpdate(gameId, goal, teams) {
           console.error(`Error posting update for goal ${goalKey}:`, error.message);
         }
       }
+    } else if (!isToday(previousScores[goalKey].timestamp)) {
+      console.log(`Removing old goal entry that was missed in initial check: ${goalKey}`);
+      delete previousScores[goalKey];
     } else {
-      console.log(`Skipping goal ${goalKey} - already processed or max updates reached`);
+      console.log(`Skipping goal ${goalKey} - already processed (${previousScores[goalKey]?.updateCount || 0} updates) or max updates reached`);
     }
   } catch (error) {
     console.error(`Error in handleGoalUpdate for game ${gameId}:`, error.message);
