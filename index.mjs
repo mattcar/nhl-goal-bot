@@ -193,7 +193,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
       console.log(`Found stale goal from previous day, removing: ${goalKey}`);
       delete previousScores[goalKey];
     }
-
+ 
     const goalMinute = goal.time.split(':')[0];
     const goalPeriod = goal.period;
     
@@ -211,7 +211,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
       }
       return false;
     });
-
+ 
     if (isDuplicate) {
       console.log(`Skipping duplicate goal/time update:`, {
         period: goalPeriod,
@@ -221,14 +221,14 @@ async function handleGoalUpdate(gameId, goal, teams) {
       });
       return;
     }
-
+ 
     console.log(`Processing goal with key: ${goalKey}`, {
       exists: !!previousScores[goalKey],
       updateCount: previousScores[goalKey]?.updateCount || 0,
       isPosted: previousScores[goalKey]?.posted || false,
       timestamp: previousScores[goalKey]?.timestamp ? new Date(previousScores[goalKey].timestamp).toISOString() : null
     });
-
+ 
     if (!previousScores[goalKey]) {
       const now = Date.now();
       previousScores[goalKey] = {
@@ -238,18 +238,18 @@ async function handleGoalUpdate(gameId, goal, teams) {
         timestamp: now,
         goal: goal
       };
-
+ 
       console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`);
       await delay(config.INITIAL_DELAY);
-
+ 
       try {
         const updatedData = await fetchGamePlayByPlay(gameId);
         const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
-
+ 
         if (updatedGoalPlay && !previousScores[goalKey].posted) {
           const message = formatGoalMessage(goal, teams);
           console.log("Attempting to post message:", message);
-
+ 
           await bot.post({ text: message });
           console.log(`Successfully posted goal ${goalKey}`);
           
@@ -270,7 +270,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
       previousScores[goalKey].updateCount++;
       const previousGoal = previousScores[goalKey].goal;
       const updatedFields = getUpdatedFields(goal, previousGoal);
-
+ 
       if (updatedFields.length > 0) {
         let message = 'CORRECTION: ';
         if (updatedFields.includes('scorer')) {
@@ -282,7 +282,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
         }
         message += `Time: ${goal.time} - ${goal.period}\n`;
         message += `Score: ${goal.score}`;
-
+ 
         try {
           await bot.post({ text: message });
           console.log(`Successfully posted update for goal ${goalKey}`);
@@ -292,16 +292,35 @@ async function handleGoalUpdate(gameId, goal, teams) {
           console.error(`Error posting update for goal ${goalKey}:`, error.message);
         }
       }
+    } else if (!previousScores[goalKey].posted) {
+      // This is a goal we've seen but haven't successfully posted yet
+      console.log(`Attempting to post previously unposted goal ${goalKey}`);
+      const now = Date.now();
+      
+      try {
+        const message = formatGoalMessage(goal, teams);
+        console.log("Attempting to post message:", message);
+ 
+        await bot.post({ text: message });
+        console.log(`Successfully posted goal ${goalKey}`);
+        
+        previousScores[goalKey].posted = true;
+        previousScores[goalKey].timestamp = now;
+        await delay(config.POST_DELAY);
+      } catch (error) {
+        console.error(`Error posting goal ${goalKey}:`, error.message);
+        delete previousScores[goalKey];
+      }
     } else if (!isToday(previousScores[goalKey].timestamp)) {
       console.log(`Removing old goal entry that was missed in initial check: ${goalKey}`);
       delete previousScores[goalKey];
     } else {
-      console.log(`Skipping goal ${goalKey} - already processed (${previousScores[goalKey]?.updateCount || 0} updates) or max updates reached`);
+      console.log(`Skipping goal ${goalKey} - already posted and processed (${previousScores[goalKey]?.updateCount || 0} updates)`);
     }
   } catch (error) {
     console.error(`Error in handleGoalUpdate for game ${gameId}:`, error.message);
   }
-}
+ }
 
 function getUpdatedFields(newGoal, oldGoal) {
   const updatedFields = [];
