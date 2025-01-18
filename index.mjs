@@ -187,13 +187,17 @@ function processGoalPlay(play, data) {
 async function handleGoalUpdate(gameId, goal, teams) {
   try {
     const goalKey = createGoalKey(gameId, goal);
+    const now = Date.now();
     
-    // Check if this goal exists in previousScores and is from a different day
-    if (previousScores[goalKey] && !isToday(previousScores[goalKey].timestamp)) {
-      console.log(`Found stale goal from previous day, removing: ${goalKey}`);
-      delete previousScores[goalKey];
+    // Force removal of any goals older than 6 hours
+    if (previousScores[goalKey]) {
+      const goalAge = now - previousScores[goalKey].timestamp;
+      if (goalAge > (6 * 60 * 60 * 1000)) {
+        console.log(`Force removing old goal ${goalKey}, age: ${Math.round(goalAge/1000/60)} minutes`);
+        delete previousScores[goalKey];
+      }
     }
- 
+
     const goalMinute = goal.time.split(':')[0];
     const goalPeriod = goal.period;
     
@@ -211,7 +215,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
       }
       return false;
     });
- 
+
     if (isDuplicate) {
       console.log(`Skipping duplicate goal/time update:`, {
         period: goalPeriod,
@@ -221,16 +225,16 @@ async function handleGoalUpdate(gameId, goal, teams) {
       });
       return;
     }
- 
+
     console.log(`Processing goal with key: ${goalKey}`, {
       exists: !!previousScores[goalKey],
       updateCount: previousScores[goalKey]?.updateCount || 0,
       isPosted: previousScores[goalKey]?.posted || false,
-      timestamp: previousScores[goalKey]?.timestamp ? new Date(previousScores[goalKey].timestamp).toISOString() : null
+      timestamp: previousScores[goalKey]?.timestamp ? new Date(previousScores[goalKey].timestamp).toISOString() : null,
+      age: previousScores[goalKey]?.timestamp ? Math.round((now - previousScores[goalKey].timestamp)/1000/60) + ' minutes' : 'new'
     });
- 
+
     if (!previousScores[goalKey]) {
-      const now = Date.now();
       previousScores[goalKey] = {
         firstSeen: now,
         posted: false,
@@ -238,23 +242,23 @@ async function handleGoalUpdate(gameId, goal, teams) {
         timestamp: now,
         goal: goal
       };
- 
+
       console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`);
       await delay(config.INITIAL_DELAY);
- 
+
       try {
         const updatedData = await fetchGamePlayByPlay(gameId);
         const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
- 
+
         if (updatedGoalPlay && !previousScores[goalKey].posted) {
           const message = formatGoalMessage(goal, teams);
           console.log("Attempting to post message:", message);
- 
+
           await bot.post({ text: message });
           console.log(`Successfully posted goal ${goalKey}`);
           
           previousScores[goalKey].posted = true;
-          previousScores[goalKey].timestamp = Date.now(); // Update timestamp after successful post
+          previousScores[goalKey].timestamp = now;
           await delay(config.POST_DELAY);
         } else {
           console.log(`Goal ${goalKey} was either already posted or no longer exists`);
@@ -270,7 +274,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
       previousScores[goalKey].updateCount++;
       const previousGoal = previousScores[goalKey].goal;
       const updatedFields = getUpdatedFields(goal, previousGoal);
- 
+
       if (updatedFields.length > 0) {
         let message = 'CORRECTION: ';
         if (updatedFields.includes('scorer')) {
@@ -282,12 +286,12 @@ async function handleGoalUpdate(gameId, goal, teams) {
         }
         message += `Time: ${goal.time} - ${goal.period}\n`;
         message += `Score: ${goal.score}`;
- 
+
         try {
           await bot.post({ text: message });
           console.log(`Successfully posted update for goal ${goalKey}`);
           previousScores[goalKey].goal = goal;
-          previousScores[goalKey].timestamp = Date.now();
+          previousScores[goalKey].timestamp = now;
         } catch (error) {
           console.error(`Error posting update for goal ${goalKey}:`, error.message);
         }
@@ -295,12 +299,11 @@ async function handleGoalUpdate(gameId, goal, teams) {
     } else if (!previousScores[goalKey].posted) {
       // This is a goal we've seen but haven't successfully posted yet
       console.log(`Attempting to post previously unposted goal ${goalKey}`);
-      const now = Date.now();
       
       try {
         const message = formatGoalMessage(goal, teams);
         console.log("Attempting to post message:", message);
- 
+
         await bot.post({ text: message });
         console.log(`Successfully posted goal ${goalKey}`);
         
@@ -311,16 +314,13 @@ async function handleGoalUpdate(gameId, goal, teams) {
         console.error(`Error posting goal ${goalKey}:`, error.message);
         delete previousScores[goalKey];
       }
-    } else if (!isToday(previousScores[goalKey].timestamp)) {
-      console.log(`Removing old goal entry that was missed in initial check: ${goalKey}`);
-      delete previousScores[goalKey];
     } else {
-      console.log(`Skipping goal ${goalKey} - already posted and processed (${previousScores[goalKey]?.updateCount || 0} updates)`);
+      console.log(`Skipping goal ${goalKey} - already posted and processed (${previousScores[goalKey]?.updateCount || 0} updates) - Age: ${Math.round((now - previousScores[goalKey].timestamp)/1000/60)} minutes`);
     }
   } catch (error) {
     console.error(`Error in handleGoalUpdate for game ${gameId}:`, error.message);
   }
- }
+}
 
 function getUpdatedFields(newGoal, oldGoal) {
   const updatedFields = [];
@@ -381,17 +381,27 @@ async function startBot() {
 
       const pollGames = async () => {
         try {
-          console.log("Fetching NHL scores at", new Date().toISOString());
+          // Check and reset memory if needed
+          const now = new Date();
+          const lastReset = global.lastMemoryReset || 0;
+          // Reset memory if it's been more than 6 hours or if it's a new day
+          if ((now - lastReset) > (6 * 60 * 60 * 1000) || !isToday(lastReset)) {
+            console.log('Performing periodic memory reset at:', now.toISOString());
+            previousScores = {};
+            global.lastMemoryReset = now.getTime();
+          }
+      
+          console.log("Fetching NHL scores at", now.toISOString());
           const scheduleData = await fetchNHLSchedule();
-
+      
           const liveGameIds = scheduleData.gameWeek.flatMap(week =>
             week.games.filter(game => game.gameState === 'LIVE').map(game => game.id)
           );
-
+      
           if (liveGameIds.length > 0) {
             console.log("Live game IDs:", liveGameIds);
           }
-
+      
           for (const gameId of liveGameIds) {
             try {
               const data = await fetchGamePlayByPlay(gameId);
@@ -399,12 +409,12 @@ async function startBot() {
                 home: data.homeTeam.abbrev,
                 away: data.awayTeam.abbrev
               };
-
+      
               const newGoals = data.plays
                 .filter(play => play.typeDescKey === 'goal' && play.details?.scoringPlayerId)
                 .map(play => processGoalPlay(play, data))
                 .filter(goal => goal !== null);
-
+      
               for (const goal of newGoals) {
                 await handleGoalUpdate(gameId, goal, teams);
               }
@@ -412,18 +422,18 @@ async function startBot() {
               console.error(`Error processing game ${gameId}:`, error.message);
             }
           }
-
+      
           cleanupOldScores();
         } catch (error) {
           console.error('Error in poll cycle:', error.message);
           if (error.message.includes('Failed to fetch') || 
               error.message.includes('Upstream') || 
               error.status === 502) {
-                console.log('Connection issue detected, restarting bot...');
-                throw error; // This will trigger process restart
-              }
-            }
-          };
+            console.log('Connection issue detected, restarting bot...');
+            throw error;
+          }
+        }
+      };
     
           // Set up polling interval
           let pollInterval = setInterval(pollGames, config.POLL_INTERVAL);
