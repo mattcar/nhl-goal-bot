@@ -61,6 +61,7 @@ function isToday(timestamp) {
   return easternDate.getDate() === easternNow.getDate() &&
          easternDate.getMonth() === easternNow.getMonth() &&
          easternDate.getFullYear() === easternNow.getFullYear();
+}
 
 function createGoalKey(gameId, goal) {
   const minutes = goal.time.split(':')[0];
