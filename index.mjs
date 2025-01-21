@@ -44,7 +44,21 @@ function safeStringify(obj) {
 }
 
 function getEasternTime(date = new Date()) {
-  return new Date(new Date(date).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  // Convert to ET using built-in timezone conversion
+  const etDate = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(date);
+  
+  // Parse the ET string back into a Date object
+  const [month, day, year, time] = etDate.split(/[\/,\s]/g).filter(Boolean);
+  return new Date(`${year}-${month}-${day}T${time}`);
 }
 
 function formatEasternTime(date) {
