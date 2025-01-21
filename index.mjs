@@ -187,13 +187,18 @@ function processGoalPlay(play, data) {
 async function handleGoalUpdate(gameId, goal, teams) {
   try {
     const goalKey = createGoalKey(gameId, goal);
-    const now = Date.now();
+    const nowET = getEasternTime();
+    const now = nowET.getTime();
     
     // Force removal of any goals older than 6 hours
     if (previousScores[goalKey]) {
-      const goalAge = now - previousScores[goalKey].timestamp;
-      if (goalAge > (6 * 60 * 60 * 1000)) {
-        console.log(`Force removing old goal ${goalKey}, age: ${Math.round(goalAge/1000/60)} minutes`);
+      const goalDate = getEasternTime(new Date(previousScores[goalKey].timestamp));
+      const goalAge = now - goalDate.getTime();
+      if (goalAge > config.SCORE_MAX_AGE) {
+        console.log(`Force removing old goal ${goalKey}:`, {
+          age: Math.round(goalAge/1000/60) + ' minutes',
+          timestamp: formatEasternTime(goalDate)
+        });
         delete previousScores[goalKey];
       }
     }
@@ -221,7 +226,8 @@ async function handleGoalUpdate(gameId, goal, teams) {
         period: goalPeriod,
         minute: goalMinute,
         scorer: goal.scorer,
-        score: `${goal.rawScores.away}-${goal.rawScores.home}`
+        score: `${goal.rawScores.away}-${goal.rawScores.home}`,
+        timestamp: formatEasternTime(nowET)
       });
       return;
     }
@@ -230,8 +236,9 @@ async function handleGoalUpdate(gameId, goal, teams) {
       exists: !!previousScores[goalKey],
       updateCount: previousScores[goalKey]?.updateCount || 0,
       isPosted: previousScores[goalKey]?.posted || false,
-      timestamp: previousScores[goalKey]?.timestamp ? new Date(previousScores[goalKey].timestamp).toISOString() : null,
-      age: previousScores[goalKey]?.timestamp ? Math.round((now - previousScores[goalKey].timestamp)/1000/60) + ' minutes' : 'new'
+      timestamp: previousScores[goalKey]?.timestamp ? 
+        formatEasternTime(new Date(previousScores[goalKey].timestamp)) : null,
+      currentTimeET: formatEasternTime(nowET)
     });
 
     if (!previousScores[goalKey]) {
@@ -243,7 +250,9 @@ async function handleGoalUpdate(gameId, goal, teams) {
         goal: goal
       };
 
-      console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`);
+      console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`, {
+        timeET: formatEasternTime(nowET)
+      });
       await delay(config.INITIAL_DELAY);
 
       try {
@@ -252,14 +261,28 @@ async function handleGoalUpdate(gameId, goal, teams) {
 
         if (updatedGoalPlay && !previousScores[goalKey].posted) {
           const message = formatGoalMessage(goal, teams);
-          console.log("Attempting to post message:", message);
+          console.log("Attempting to post message:", message, {
+            timeET: formatEasternTime(getEasternTime())
+          });
 
-          await bot.post({ text: message });
-          console.log(`Successfully posted goal ${goalKey}`);
-          
-          previousScores[goalKey].posted = true;
-          previousScores[goalKey].timestamp = now;
-          await delay(config.POST_DELAY);
+          try {
+            const postResponse = await bot.post({ text: message });
+            console.log(`Successfully posted goal ${goalKey}`, {
+              response: safeStringify(postResponse),
+              timeET: formatEasternTime(getEasternTime())
+            });
+            
+            previousScores[goalKey].posted = true;
+            previousScores[goalKey].timestamp = getEasternTime().getTime();
+            await delay(config.POST_DELAY);
+          } catch (postError) {
+            console.error(`Error posting to Bluesky:`, {
+              error: postError.message,
+              stack: postError.stack,
+              errorObj: safeStringify(postError)
+            });
+            throw postError;
+          }
         } else {
           console.log(`Goal ${goalKey} was either already posted or no longer exists`);
           delete previousScores[goalKey];
@@ -268,9 +291,39 @@ async function handleGoalUpdate(gameId, goal, teams) {
         console.error(`Error posting goal ${goalKey}:`, error.message);
         delete previousScores[goalKey];
       }
+    } else if (!previousScores[goalKey].posted) {
+      // This is a goal we've seen but haven't successfully posted yet
+      console.log(`Attempting to post previously unposted goal ${goalKey}`, {
+        currentTimeET: formatEasternTime(nowET),
+        goalFirstSeen: formatEasternTime(new Date(previousScores[goalKey].firstSeen)),
+        goalTimestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp))
+      });
+      
+      try {
+        const message = formatGoalMessage(goal, teams);
+        console.log("Attempting to post message:", message);
+
+        const postResponse = await bot.post({ text: message });
+        console.log(`Successfully posted goal ${goalKey}`, {
+          response: safeStringify(postResponse),
+          timeET: formatEasternTime(getEasternTime())
+        });
+        
+        previousScores[goalKey].posted = true;
+        previousScores[goalKey].timestamp = getEasternTime().getTime();
+        await delay(config.POST_DELAY);
+      } catch (error) {
+        console.error(`Error posting goal ${goalKey}:`, {
+          error: error.message,
+          stack: error.stack,
+          errorObj: safeStringify(error)
+        });
+        delete previousScores[goalKey];
+      }
     } else if (previousScores[goalKey].posted && 
                previousScores[goalKey].updateCount < config.MAX_UPDATES && 
                isToday(previousScores[goalKey].timestamp)) {
+      // Handle updates...
       previousScores[goalKey].updateCount++;
       const previousGoal = previousScores[goalKey].goal;
       const updatedFields = getUpdatedFields(goal, previousGoal);
@@ -288,37 +341,35 @@ async function handleGoalUpdate(gameId, goal, teams) {
         message += `Score: ${goal.score}`;
 
         try {
-          await bot.post({ text: message });
-          console.log(`Successfully posted update for goal ${goalKey}`);
+          const postResponse = await bot.post({ text: message });
+          console.log(`Successfully posted update for goal ${goalKey}`, {
+            response: safeStringify(postResponse),
+            timeET: formatEasternTime(getEasternTime())
+          });
           previousScores[goalKey].goal = goal;
-          previousScores[goalKey].timestamp = now;
+          previousScores[goalKey].timestamp = getEasternTime().getTime();
         } catch (error) {
-          console.error(`Error posting update for goal ${goalKey}:`, error.message);
+          console.error(`Error posting update for goal ${goalKey}:`, {
+            error: error.message,
+            stack: error.stack,
+            errorObj: safeStringify(error)
+          });
         }
       }
-    } else if (!previousScores[goalKey].posted) {
-      // This is a goal we've seen but haven't successfully posted yet
-      console.log(`Attempting to post previously unposted goal ${goalKey}`);
-      
-      try {
-        const message = formatGoalMessage(goal, teams);
-        console.log("Attempting to post message:", message);
-
-        await bot.post({ text: message });
-        console.log(`Successfully posted goal ${goalKey}`);
-        
-        previousScores[goalKey].posted = true;
-        previousScores[goalKey].timestamp = now;
-        await delay(config.POST_DELAY);
-      } catch (error) {
-        console.error(`Error posting goal ${goalKey}:`, error.message);
-        delete previousScores[goalKey];
-      }
     } else {
-      console.log(`Skipping goal ${goalKey} - already posted and processed (${previousScores[goalKey]?.updateCount || 0} updates) - Age: ${Math.round((now - previousScores[goalKey].timestamp)/1000/60)} minutes`);
+      console.log(`Skipping goal ${goalKey}:`, {
+        reason: 'already posted and processed',
+        updates: previousScores[goalKey]?.updateCount || 0,
+        age: Math.round((now - previousScores[goalKey].timestamp)/1000/60) + ' minutes',
+        timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp)),
+        currentTimeET: formatEasternTime(nowET)
+      });
     }
   } catch (error) {
-    console.error(`Error in handleGoalUpdate for game ${gameId}:`, error.message);
+    console.error(`Error in handleGoalUpdate for game ${gameId}:`, {
+      error: error.message,
+      stack: error.stack
+    });
   }
 }
 
