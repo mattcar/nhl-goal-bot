@@ -26,14 +26,6 @@ let previousScores = {};
 // Utility functions
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-function isToday(timestamp) {
-  const today = new Date();
-  const date = new Date(timestamp);
-  return date.getDate() === today.getDate() &&
-    date.getMonth() === today.getMonth() &&
-    date.getFullYear() === today.getFullYear();
-}
-
 function safeStringify(obj) {
   try {
     const cache = new WeakSet();
@@ -69,7 +61,6 @@ function isToday(timestamp) {
   return easternDate.getDate() === easternNow.getDate() &&
          easternDate.getMonth() === easternNow.getMonth() &&
          easternDate.getFullYear() === easternNow.getFullYear();
-}
 
 function createGoalKey(gameId, goal) {
   const minutes = goal.time.split(':')[0];
