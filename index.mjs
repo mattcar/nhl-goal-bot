@@ -51,6 +51,26 @@ function safeStringify(obj) {
   }
 }
 
+function getEasternTime(date = new Date()) {
+  return new Date(new Date(date).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+}
+
+function formatEasternTime(date) {
+  return date.toLocaleString('en-US', { 
+    timeZone: 'America/New_York',
+    dateStyle: 'short',
+    timeStyle: 'long'
+  });
+}
+
+function isToday(timestamp) {
+  const easternNow = getEasternTime();
+  const easternDate = getEasternTime(new Date(timestamp));
+  return easternDate.getDate() === easternNow.getDate() &&
+         easternDate.getMonth() === easternNow.getMonth() &&
+         easternDate.getFullYear() === easternNow.getFullYear();
+}
+
 function createGoalKey(gameId, goal) {
   const minutes = goal.time.split(':')[0];
   return `${gameId}-${goal.eventId}-${goal.scorer}-${goal.period}-${minutes}-${goal.rawScores.away}-${goal.rawScores.home}`;
