@@ -44,8 +44,8 @@ function safeStringify(obj) {
 }
 
 function getEasternTime(date = new Date()) {
-  // Convert to ET using built-in timezone conversion
-  const etDate = new Intl.DateTimeFormat('en-US', {
+  // Create formatter in ET
+  const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
     year: 'numeric',
     month: '2-digit',
@@ -53,12 +53,20 @@ function getEasternTime(date = new Date()) {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hour12: false
-  }).format(date);
-  
-  // Parse the ET string back into a Date object
-  const [month, day, year, time] = etDate.split(/[\/,\s]/g).filter(Boolean);
-  return new Date(`${year}-${month}-${day}T${time}`);
+    hourCycle: 'h23', // Use 24-hour format to avoid AM/PM issues
+    fractionalSecondDigits: 3
+  });
+
+  // Get parts
+  const parts = formatter.formatToParts(date);
+  const partMap = parts.reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+
+  // Construct ISO string in ET
+  const isoString = `${partMap.year}-${partMap.month}-${partMap.day}T${partMap.hour}:${partMap.minute}:${partMap.second}.${partMap.fractionalSecond}`;
+  return new Date(isoString);
 }
 
 function formatEasternTime(date) {
@@ -458,12 +466,12 @@ async function startBot() {
 
       const pollGames = async () => {
         try {
-          // Check and reset memory if needed
-          const now = new Date();
+          const now = getEasternTime();
           const lastReset = global.lastMemoryReset || 0;
-          // Reset memory if it's been more than 6 hours or if it's a new day
-          if ((now - lastReset) > (6 * 60 * 60 * 1000) || !isToday(lastReset)) {
-            console.log('Performing periodic memory reset at:', now.toISOString());
+          
+          // Force memory clear at the start of each day in ET
+          if (!isToday(lastReset)) {
+            console.log('New day detected in ET, clearing all previous scores');
             previousScores = {};
             global.lastMemoryReset = now.getTime();
           }
