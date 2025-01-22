@@ -5,11 +5,11 @@ import http from 'http';
 // Configuration
 const config = {
   INITIAL_DELAY: 45000,
-  POST_DELAY: 180000,
+  POST_DELAY: 60000,
   MAX_UPDATES: 2,
-  POLL_INTERVAL: 60000,
+  POLL_INTERVAL: 45000,
   API_BASE_URL: 'https://api-web.nhle.com/v1',
-  SCORE_MAX_AGE: 6 * 60 * 60 * 1000, // 6 hours in milliseconds
+  SCORE_MAX_AGE: 5 * 60 * 60 * 1000, // 6 hours in milliseconds
 };
 
 // Validate environment variables
