@@ -44,18 +44,11 @@ function safeStringify(obj) {
 }
 
 function getEasternTime(date = new Date()) {
-  // Create formatter in ET
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23', // Use 24-hour format to avoid AM/PM issues
-    fractionalSecondDigits: 3
-  });
+  const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const etDate = new Date(date.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const offset = utcDate.getTime() - etDate.getTime();
+  return new Date(date.getTime() - offset);
+}
 
   // Get parts
   const parts = formatter.formatToParts(date);
