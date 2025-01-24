@@ -51,18 +51,6 @@ function getEasternTime(date = new Date()) {
   );
 }
 
-  // Get parts
-  const parts = formatter.formatToParts(date);
-  const partMap = parts.reduce((acc, part) => {
-    acc[part.type] = part.value;
-    return acc;
-  }, {});
-
-  // Construct ISO string in ET
-  const isoString = `${partMap.year}-${partMap.month}-${partMap.day}T${partMap.hour}:${partMap.minute}:${partMap.second}.${partMap.fractionalSecond}`;
-  return new Date(isoString);
-}
-
 function formatEasternTime(date) {
   return date.toLocaleString('en-US', { 
     timeZone: 'America/New_York',
