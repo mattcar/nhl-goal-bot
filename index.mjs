@@ -44,10 +44,11 @@ function safeStringify(obj) {
 }
 
 function getEasternTime(date = new Date()) {
-  const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
-  const etDate = new Date(date.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const offset = utcDate.getTime() - etDate.getTime();
-  return new Date(date.getTime() - offset);
+  return new Date(
+    date.toLocaleString('en-US', { 
+      timeZone: 'America/New_York'
+    })
+  );
 }
 
   // Get parts
