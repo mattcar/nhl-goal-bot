@@ -276,6 +276,12 @@ async function handleGoalUpdate(gameId, goal, teams) {
       console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`);
       await delay(config.INITIAL_DELAY);
 
+      // Add a posting lock
+      if (previousScores[goalKey].posted) {
+        console.log(`Goal ${goalKey} was posted during delay, skipping`);
+        return;
+      }
+
       try {
         const updatedData = await fetchGamePlayByPlay(gameId);
         const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
@@ -301,13 +307,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
         console.error(`Error posting goal ${goalKey}:`, error.message);
         delete previousScores[goalKey];
       }
-    } else if (!previousScores[goalKey].posted) {
-      console.log(`Attempting to post previously unposted goal ${goalKey}`, {
-        currentTime: formatEasternTime(new Date(now)),
-        firstSeen: formatEasternTime(new Date(previousScores[goalKey].firstSeen)),
-        timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp))
-      });
-      
+
       try {
         const message = formatGoalMessage(goal, teams);
         console.log("Attempting to post message:", message);
