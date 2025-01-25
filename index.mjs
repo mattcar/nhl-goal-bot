@@ -44,6 +44,12 @@ function safeStringify(obj) {
 }
 
 function getEasternTime(date = new Date()) {
+  console.log('getEasternTime debug:', {
+    input: date.toISOString(),
+    inputTimestamp: date.getTime(),
+    currentUTCHours: date.getUTCHours(),
+    currentLocalHours: date.getHours()
+  });
   return new Date(
     date.toLocaleString('en-US', { 
       timeZone: 'America/New_York'
