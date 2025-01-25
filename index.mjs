@@ -73,21 +73,34 @@ function createGoalKey(gameId, goal) {
 }
 
 function cleanupOldScores() {
-  const now = Date.now();
+  const nowET = getEasternTime();
   const initialCount = Object.keys(previousScores).length;
   
   Object.keys(previousScores).forEach(key => {
-    // Remove scores older than 6 hours or from a different day
-    if (!isToday(previousScores[key].timestamp) || 
-        (now - previousScores[key].timestamp) > config.SCORE_MAX_AGE) {
-      console.log(`Removing old goal: ${key}`, {
-        age: Math.round((now - previousScores[key].timestamp) / 1000 / 60) + ' minutes',
+    const scoreDate = getEasternTime(new Date(previousScores[key].timestamp));
+    const ageMinutes = Math.round((nowET - scoreDate) / (1000 * 60));
+
+    if (!isToday(previousScores[key].timestamp) || ageMinutes > 360) { // 6 hours in minutes
+      console.log(`Considering cleanup for goal ${key}:`, {
+        ageMinutes,
+        scoreTime: formatEasternTime(scoreDate),
+        currentTime: formatEasternTime(nowET),
         wasToday: isToday(previousScores[key].timestamp)
       });
-      delete previousScores[key];
+
+      // Only remove if truly old
+      if (ageMinutes > 360) {
+        console.log(`Removing old goal: ${key}`);
+        delete previousScores[key];
+      }
     }
   });
 
+  const finalCount = Object.keys(previousScores).length;
+  if (initialCount !== finalCount) {
+    console.log(`Cleaned up ${initialCount - finalCount} old goals. ${finalCount} remaining.`);
+  }
+}
   const finalCount = Object.keys(previousScores).length;
   if (initialCount !== finalCount) {
     console.log(`Cleaned up ${initialCount - finalCount} old goals. ${finalCount} remaining.`);
@@ -204,29 +217,21 @@ async function handleGoalUpdate(gameId, goal, teams) {
   try {
     const goalKey = createGoalKey(gameId, goal);
     const nowET = getEasternTime();
-    const now = nowET.getTime();
- 
-    // Debug log of existing goals
-    const existingGoals = Object.entries(previousScores)
-      .filter(([key]) => key.startsWith(gameId))
-      .map(([key, value]) => ({
-        key,
-        posted: value.posted,
-        timestamp: formatEasternTime(new Date(value.timestamp)),
-        age: Math.round((now - value.timestamp)/1000/60)
-      }));
- 
-    if (existingGoals.length > 0) {
-      console.log(`Current goals in memory for game ${gameId}:`, existingGoals);
-    }
     
     // Force removal of any goals older than configured max age
     if (previousScores[goalKey]) {
       const goalDate = getEasternTime(new Date(previousScores[goalKey].timestamp));
-      const goalAge = now - goalDate.getTime();
-      if (goalAge > config.SCORE_MAX_AGE) {
+      const ageMinutes = Math.round((nowET - goalDate) / (1000 * 60));
+ 
+      console.log(`Checking age for goal ${goalKey}:`, {
+        ageMinutes,
+        goalTime: formatEasternTime(goalDate),
+        currentTime: formatEasternTime(nowET)
+      });
+ 
+      if (ageMinutes > 360) { // 6 hours in minutes
         console.log(`Force removing old goal ${goalKey}:`, {
-          age: Math.round(goalAge/1000/60) + ' minutes',
+          ageMinutes,
           timestamp: formatEasternTime(goalDate)
         });
         delete previousScores[goalKey];
@@ -251,8 +256,8 @@ async function handleGoalUpdate(gameId, goal, teams) {
         if (isDup) {
           console.log(`Found duplicate match with existing goal:`, {
             existingKey: key,
-            existingTimestamp: formatEasternTime(new Date(value.timestamp)),
-            age: Math.round((now - value.timestamp)/1000/60) + ' minutes'
+            existingTime: formatEasternTime(new Date(value.timestamp)),
+            currentTime: formatEasternTime(nowET)
           });
         }
         
@@ -275,24 +280,19 @@ async function handleGoalUpdate(gameId, goal, teams) {
     console.log(`Processing goal with key: ${goalKey}`, {
       exists: !!previousScores[goalKey],
       updateCount: previousScores[goalKey]?.updateCount || 0,
-      isPosted: previousScores[goalKey]?.posted || false,
-      timestamp: previousScores[goalKey]?.timestamp ? 
-        formatEasternTime(new Date(previousScores[goalKey].timestamp)) : null,
-      currentTimeET: formatEasternTime(nowET)
+      isPosted: previousScores[goalKey]?.posted || false
     });
  
     if (!previousScores[goalKey]) {
       previousScores[goalKey] = {
-        firstSeen: now,
+        firstSeen: nowET.getTime(),
         posted: false,
         updateCount: 0,
-        timestamp: now,
+        timestamp: nowET.getTime(),
         goal: goal
       };
  
-      console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`, {
-        timeET: formatEasternTime(nowET)
-      });
+      console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`);
       await delay(config.INITIAL_DELAY);
  
       try {
@@ -301,28 +301,17 @@ async function handleGoalUpdate(gameId, goal, teams) {
  
         if (updatedGoalPlay && !previousScores[goalKey].posted) {
           const message = formatGoalMessage(goal, teams);
-          console.log("Attempting to post message:", message, {
-            timeET: formatEasternTime(getEasternTime())
-          });
+          console.log("Attempting to post message:", message);
  
-          try {
-            const postResponse = await bot.post({ text: message });
-            console.log(`Successfully posted goal ${goalKey}`, {
-              response: safeStringify(postResponse),
-              timeET: formatEasternTime(getEasternTime())
-            });
-            
-            previousScores[goalKey].posted = true;
-            previousScores[goalKey].timestamp = getEasternTime().getTime();
-            await delay(config.POST_DELAY);
-          } catch (postError) {
-            console.error(`Error posting to Bluesky:`, {
-              error: postError.message,
-              stack: postError.stack,
-              errorObj: safeStringify(postError)
-            });
-            throw postError;
-          }
+          const postResponse = await bot.post({ text: message });
+          console.log(`Successfully posted goal ${goalKey}`, {
+            uri: postResponse.uri,
+            timeET: formatEasternTime(nowET)
+          });
+          
+          previousScores[goalKey].posted = true;
+          previousScores[goalKey].timestamp = nowET.getTime();
+          await delay(config.POST_DELAY);
         } else {
           console.log(`Goal ${goalKey} was either already posted or no longer exists`);
           delete previousScores[goalKey];
@@ -333,9 +322,9 @@ async function handleGoalUpdate(gameId, goal, teams) {
       }
     } else if (!previousScores[goalKey].posted) {
       console.log(`Attempting to post previously unposted goal ${goalKey}`, {
-        currentTimeET: formatEasternTime(nowET),
-        goalFirstSeen: formatEasternTime(new Date(previousScores[goalKey].firstSeen)),
-        goalTimestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp))
+        currentTime: formatEasternTime(nowET),
+        firstSeen: formatEasternTime(new Date(previousScores[goalKey].firstSeen)),
+        timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp))
       });
       
       try {
@@ -344,19 +333,15 @@ async function handleGoalUpdate(gameId, goal, teams) {
  
         const postResponse = await bot.post({ text: message });
         console.log(`Successfully posted goal ${goalKey}`, {
-          response: safeStringify(postResponse),
-          timeET: formatEasternTime(getEasternTime())
+          uri: postResponse.uri,
+          timeET: formatEasternTime(nowET)
         });
         
         previousScores[goalKey].posted = true;
-        previousScores[goalKey].timestamp = getEasternTime().getTime();
+        previousScores[goalKey].timestamp = nowET.getTime();
         await delay(config.POST_DELAY);
       } catch (error) {
-        console.error(`Error posting goal ${goalKey}:`, {
-          error: error.message,
-          stack: error.stack,
-          errorObj: safeStringify(error)
-        });
+        console.error(`Error posting goal ${goalKey}:`, error.message);
         delete previousScores[goalKey];
       }
     } else if (previousScores[goalKey].posted && 
@@ -381,33 +366,25 @@ async function handleGoalUpdate(gameId, goal, teams) {
         try {
           const postResponse = await bot.post({ text: message });
           console.log(`Successfully posted update for goal ${goalKey}`, {
-            response: safeStringify(postResponse),
-            timeET: formatEasternTime(getEasternTime())
+            uri: postResponse.uri,
+            timeET: formatEasternTime(nowET)
           });
           previousScores[goalKey].goal = goal;
-          previousScores[goalKey].timestamp = getEasternTime().getTime();
+          previousScores[goalKey].timestamp = nowET.getTime();
         } catch (error) {
-          console.error(`Error posting update for goal ${goalKey}:`, {
-            error: error.message,
-            stack: error.stack,
-            errorObj: safeStringify(error)
-          });
+          console.error(`Error posting update for goal ${goalKey}:`, error.message);
         }
       }
     } else {
       console.log(`Skipping goal ${goalKey}:`, {
         reason: 'already posted and processed',
         updates: previousScores[goalKey]?.updateCount || 0,
-        age: Math.round((now - previousScores[goalKey].timestamp)/1000/60) + ' minutes',
-        timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp)),
-        currentTimeET: formatEasternTime(nowET)
+        age: Math.round((nowET - new Date(previousScores[goalKey].timestamp)) / (1000 * 60)) + ' minutes',
+        timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp))
       });
     }
   } catch (error) {
-    console.error(`Error in handleGoalUpdate for game ${gameId}:`, {
-      error: error.message,
-      stack: error.stack
-    });
+    console.error(`Error in handleGoalUpdate for game ${gameId}:`, error.message);
   }
  }
 
@@ -423,7 +400,8 @@ function getUpdatedFields(newGoal, oldGoal) {
 async function startBot() {
   // Clear previousScores at startup
   previousScores = {};
-  console.log('Cleared previous scores at startup');
+  global.lastMemoryReset = getEasternTime().getTime();
+  console.log('Cleared previous scores at startup:', formatEasternTime(new Date()));
 
   async function attemptLogin(maxRetries = 5, delayBetweenRetries = 30000) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -470,27 +448,30 @@ async function startBot() {
 
       const pollGames = async () => {
         try {
-          const now = getEasternTime();
+          const nowET = getEasternTime();
           const lastReset = global.lastMemoryReset || 0;
           
           // Force memory clear at the start of each day in ET
           if (!isToday(lastReset)) {
-            console.log('New day detected in ET, clearing all previous scores');
+            console.log('New day detected in ET, clearing all previous scores', {
+              lastResetTime: formatEasternTime(new Date(lastReset)),
+              currentTime: formatEasternTime(nowET)
+            });
             previousScores = {};
-            global.lastMemoryReset = now.getTime();
+            global.lastMemoryReset = nowET.getTime();
           }
-      
-          console.log("Fetching NHL scores at", now.toISOString());
+
+          console.log("Fetching NHL scores at", formatEasternTime(nowET));
           const scheduleData = await fetchNHLSchedule();
-      
+
           const liveGameIds = scheduleData.gameWeek.flatMap(week =>
             week.games.filter(game => game.gameState === 'LIVE').map(game => game.id)
           );
-      
+
           if (liveGameIds.length > 0) {
             console.log("Live game IDs:", liveGameIds);
           }
-      
+
           for (const gameId of liveGameIds) {
             try {
               const data = await fetchGamePlayByPlay(gameId);
@@ -498,12 +479,12 @@ async function startBot() {
                 home: data.homeTeam.abbrev,
                 away: data.awayTeam.abbrev
               };
-      
+
               const newGoals = data.plays
                 .filter(play => play.typeDescKey === 'goal' && play.details?.scoringPlayerId)
                 .map(play => processGoalPlay(play, data))
                 .filter(goal => goal !== null);
-      
+
               for (const goal of newGoals) {
                 await handleGoalUpdate(gameId, goal, teams);
               }
@@ -511,7 +492,7 @@ async function startBot() {
               console.error(`Error processing game ${gameId}:`, error.message);
             }
           }
-      
+
           cleanupOldScores();
         } catch (error) {
           console.error('Error in poll cycle:', error.message);
@@ -523,37 +504,36 @@ async function startBot() {
           }
         }
       };
-    
-          // Set up polling interval
-          let pollInterval = setInterval(pollGames, config.POLL_INTERVAL);
-    
-          // Handle process termination
-          process.on('SIGTERM', () => {
-            console.log('SIGTERM received, cleaning up...');
-            clearInterval(pollInterval);
-            process.exit(0);
-          });
-    
-          process.on('SIGINT', () => {
-            console.log('SIGINT received, cleaning up...');
-            clearInterval(pollInterval);
-            process.exit(0);
-          });
-    
-          // Start initial poll
-          await pollGames();
-    
-          // If we get here without error, break the while loop
-          break;
-    
-        } catch (error) {
-          console.error('Fatal error, restarting bot in 60 seconds:', error.message);
-          await delay(60000);
-          // Continue while loop to restart the whole process
-        }
-      }
+
+      // Set up polling interval
+      let pollInterval = setInterval(pollGames, config.POLL_INTERVAL);
+
+      // Handle process termination
+      process.on('SIGTERM', () => {
+        console.log('SIGTERM received, cleaning up...');
+        clearInterval(pollInterval);
+        process.exit(0);
+      });
+
+      process.on('SIGINT', () => {
+        console.log('SIGINT received, cleaning up...');
+        clearInterval(pollInterval);
+        process.exit(0);
+      });
+
+      // Start initial poll
+      await pollGames();
+
+      // If we get here without error, break the while loop
+      break;
+
+    } catch (error) {
+      console.error('Fatal error, restarting bot in 60 seconds:', error.message);
+      await delay(60000);
+      // Continue while loop to restart the whole process
     }
-    
+  }
+}
     // Start the bot
     startBot();
     
