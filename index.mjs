@@ -307,24 +307,6 @@ async function handleGoalUpdate(gameId, goal, teams) {
         console.error(`Error posting goal ${goalKey}:`, error.message);
         delete previousScores[goalKey];
       }
-
-      try {
-        const message = formatGoalMessage(goal, teams);
-        console.log("Attempting to post message:", message);
-
-        const postResponse = await bot.post({ text: message });
-        console.log(`Successfully posted goal ${goalKey}`, {
-          uri: postResponse?.uri || 'unknown',
-          timeET: formatEasternTime(new Date(now))
-        });
-        
-        previousScores[goalKey].posted = true;
-        previousScores[goalKey].timestamp = now;
-        await delay(config.POST_DELAY);
-      } catch (error) {
-        console.error(`Error posting goal ${goalKey}:`, error.message);
-        delete previousScores[goalKey];
-      }
     } else if (previousScores[goalKey].posted && 
                previousScores[goalKey].updateCount < config.MAX_UPDATES && 
                isToday(previousScores[goalKey].timestamp)) {
