@@ -192,10 +192,19 @@ function getUpdatedFields(newGoal, oldGoal) {
   return updatedFields;
 }
 
+// Add this with other globals at the top of the file
+let postingInProgress = {};
+
 async function handleGoalUpdate(gameId, goal, teams) {
   try {
     const goalKey = createGoalKey(gameId, goal);
     const now = Date.now();
+    
+    // Check if post is in progress
+    if (postingInProgress[goalKey]) {
+      console.log(`Skipping ${goalKey} - posting already in progress`);
+      return;
+    }
     
     // Force removal of any goals older than configured max age
     if (previousScores[goalKey]) {
@@ -206,7 +215,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
         timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp)),
         currentTime: formatEasternTime(new Date(now))
       });
- 
+
       if (ageInMinutes > 360 || !isToday(previousScores[goalKey].timestamp)) {
         console.log(`Force removing old goal ${goalKey}:`, {
           ageInMinutes,
@@ -215,7 +224,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
         delete previousScores[goalKey];
       }
     }
- 
+
     const goalMinute = goal.time.split(':')[0];
     const goalPeriod = goal.period;
     
@@ -230,7 +239,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
                      prevGoal.scorer === goal.scorer &&
                      prevGoal.rawScores.away === goal.rawScores.away &&
                      prevGoal.rawScores.home === goal.rawScores.home;
- 
+
         if (isDup) {
           console.log(`Found duplicate match with existing goal:`, {
             existingKey: key,
@@ -243,7 +252,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
       }
       return false;
     });
- 
+
     if (isDuplicate) {
       console.log(`Skipping duplicate goal/time update:`, {
         period: goalPeriod,
@@ -254,7 +263,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
       });
       return;
     }
- 
+
     console.log(`Processing goal with key: ${goalKey}`, {
       exists: !!previousScores[goalKey],
       updateCount: previousScores[goalKey]?.updateCount || 0,
@@ -263,7 +272,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
         formatEasternTime(new Date(previousScores[goalKey].timestamp)) : null,
       currentTime: formatEasternTime(new Date(now))
     });
- 
+
     if (!previousScores[goalKey]) {
       previousScores[goalKey] = {
         firstSeen: now,
@@ -272,18 +281,20 @@ async function handleGoalUpdate(gameId, goal, teams) {
         timestamp: now,
         goal: goal
       };
- 
-      console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`);
-      await delay(config.INITIAL_DELAY);
- 
+
       try {
+        postingInProgress[goalKey] = true;  // Set lock
+        
+        console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`);
+        await delay(config.INITIAL_DELAY);
+
         const updatedData = await fetchGamePlayByPlay(gameId);
         const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
- 
+
         if (updatedGoalPlay && !previousScores[goalKey].posted) {
           const message = formatGoalMessage(goal, teams);
           console.log("Attempting to post message:", message);
- 
+
           const postResponse = await bot.post({ text: message });
           console.log(`Successfully posted goal ${goalKey}`, {
             uri: postResponse?.uri || 'unknown',
@@ -300,14 +311,17 @@ async function handleGoalUpdate(gameId, goal, teams) {
       } catch (error) {
         console.error(`Error posting goal ${goalKey}:`, error.message);
         delete previousScores[goalKey];
+      } finally {
+        delete postingInProgress[goalKey];  // Always clear lock
       }
     } else if (!previousScores[goalKey].posted) {
-      // Try to post unposted goal
-      console.log(`Attempting to post previously unposted goal ${goalKey}`);
       try {
+        postingInProgress[goalKey] = true;  // Set lock
+        
+        console.log(`Attempting to post previously unposted goal ${goalKey}`);
         const message = formatGoalMessage(goal, teams);
         console.log("Attempting to post message:", message);
- 
+
         const postResponse = await bot.post({ text: message });
         console.log(`Successfully posted goal ${goalKey}`, {
           uri: postResponse?.uri || 'unknown',
@@ -320,27 +334,31 @@ async function handleGoalUpdate(gameId, goal, teams) {
       } catch (error) {
         console.error(`Error posting goal ${goalKey}:`, error.message);
         delete previousScores[goalKey];
+      } finally {
+        delete postingInProgress[goalKey];  // Always clear lock
       }
     } else if (previousScores[goalKey].posted && 
                previousScores[goalKey].updateCount < config.MAX_UPDATES && 
                isToday(previousScores[goalKey].timestamp)) {
-      previousScores[goalKey].updateCount++;
-      const previousGoal = previousScores[goalKey].goal;
-      const updatedFields = getUpdatedFields(goal, previousGoal);
- 
-      if (updatedFields.length > 0) {
-        let message = 'CORRECTION: ';
-        if (updatedFields.includes('scorer')) {
-          message += `Goal now credited to ${goal.scorer} (previously ${previousGoal.scorer})\n`;
-        }
-        message += `${teams.away} vs. ${teams.home}\n`;
-        if (goal.assists) {
-          message += `Assists: ${goal.assists}\n`;
-        }
-        message += `Time: ${goal.time} - ${goal.period}\n`;
-        message += `Score: ${goal.score}`;
- 
-        try {
+      try {
+        postingInProgress[goalKey] = true;  // Set lock
+        
+        previousScores[goalKey].updateCount++;
+        const previousGoal = previousScores[goalKey].goal;
+        const updatedFields = getUpdatedFields(goal, previousGoal);
+
+        if (updatedFields.length > 0) {
+          let message = 'CORRECTION: ';
+          if (updatedFields.includes('scorer')) {
+            message += `Goal now credited to ${goal.scorer} (previously ${previousGoal.scorer})\n`;
+          }
+          message += `${teams.away} vs. ${teams.home}\n`;
+          if (goal.assists) {
+            message += `Assists: ${goal.assists}\n`;
+          }
+          message += `Time: ${goal.time} - ${goal.period}\n`;
+          message += `Score: ${goal.score}`;
+
           const postResponse = await bot.post({ text: message });
           console.log(`Successfully posted update for goal ${goalKey}`, {
             uri: postResponse?.uri || 'unknown',
@@ -348,12 +366,13 @@ async function handleGoalUpdate(gameId, goal, teams) {
           });
           previousScores[goalKey].goal = goal;
           previousScores[goalKey].timestamp = now;
-        } catch (error) {
-          console.error(`Error posting update for goal ${goalKey}:`, error.message);
         }
+      } catch (error) {
+        console.error(`Error posting update for goal ${goalKey}:`, error.message);
+      } finally {
+        delete postingInProgress[goalKey];  // Always clear lock
       }
     } else {
-      // Only skip if it's actually been posted
       console.log(`Skipping goal ${goalKey}:`, {
         reason: previousScores[goalKey].posted ? 'already posted and processed' : 'unhandled state',
         isPosted: previousScores[goalKey].posted,
@@ -365,7 +384,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
   } catch (error) {
     console.error(`Error in handleGoalUpdate for game ${gameId}:`, error.message);
   }
- }
+}
 
 async function startBot() {
   // Clear previousScores at startup
