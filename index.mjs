@@ -22,8 +22,25 @@ globalThis.Headers = fetch.Headers;
 
 const bot = new Bot();
 let previousScores = {};
+let postingInProgress = {};
 
-// Utility functions
+function setPostingLock(goalKey) {
+  if (postingInProgress[goalKey]) {
+    const lockAge = Date.now() - postingInProgress[goalKey];
+    if (lockAge > 60000) { // If lock is older than 1 minute
+      console.log(`Clearing stale lock for ${goalKey}, age: ${Math.round(lockAge/1000)}s`);
+      delete postingInProgress[goalKey];
+    } else {
+      return false;
+    }
+  }
+  postingInProgress[goalKey] = Date.now();
+  return true;
+}
+
+function clearPostingLock(goalKey) {
+  delete postingInProgress[goalKey];
+}
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function getEasternTime(date = new Date()) {
@@ -192,106 +209,103 @@ function getUpdatedFields(newGoal, oldGoal) {
   return updatedFields;
 }
 
-// Add this with other globals at the top of the file
-let postingInProgress = {};
-
 async function handleGoalUpdate(gameId, goal, teams) {
+  const goalKey = createGoalKey(gameId, goal);
+  
   try {
-    const goalKey = createGoalKey(gameId, goal);
     const now = Date.now();
     
-    // Check if post is in progress
-    if (postingInProgress[goalKey]) {
-      console.log(`Skipping ${goalKey} - posting already in progress`);
+    // Check if post is in progress with timeout
+    if (!setPostingLock(goalKey)) {
+      const lockAge = Math.round((now - postingInProgress[goalKey])/1000);
+      console.log(`Skipping ${goalKey} - posting in progress for ${lockAge}s`);
       return;
     }
-    
-    // Force removal of any goals older than configured max age
-    if (previousScores[goalKey]) {
-      const ageInMinutes = getAgeInMinutes(previousScores[goalKey].timestamp);
+
+    try {
+      // Force removal of any goals older than configured max age
+      if (previousScores[goalKey]) {
+        const ageInMinutes = getAgeInMinutes(previousScores[goalKey].timestamp);
+        
+        console.log(`Checking age for goal ${goalKey}:`, {
+          ageInMinutes,
+          timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp)),
+          currentTime: formatEasternTime(new Date(now))
+        });
+
+        if (ageInMinutes > 360 || !isToday(previousScores[goalKey].timestamp)) {
+          console.log(`Force removing old goal ${goalKey}:`, {
+            ageInMinutes,
+            timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp))
+          });
+          delete previousScores[goalKey];
+        }
+      }
+
+      const goalMinute = goal.time.split(':')[0];
+      const goalPeriod = goal.period;
       
-      console.log(`Checking age for goal ${goalKey}:`, {
-        ageInMinutes,
-        timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp)),
+      // Check for existing goals that are the same except for seconds
+      const isDuplicate = Object.entries(previousScores).some(([key, value]) => {
+        if (key.startsWith(gameId) && value.posted && isToday(value.timestamp)) {
+          const prevGoal = value.goal;
+          const prevMinute = prevGoal.time.split(':')[0];
+          
+          const isDup = prevGoal.period === goalPeriod && 
+                       prevMinute === goalMinute && 
+                       prevGoal.scorer === goal.scorer &&
+                       prevGoal.rawScores.away === goal.rawScores.away &&
+                       prevGoal.rawScores.home === goal.rawScores.home;
+
+          if (isDup) {
+            console.log(`Found duplicate match with existing goal:`, {
+              existingKey: key,
+              existingTime: formatEasternTime(new Date(value.timestamp)),
+              currentTime: formatEasternTime(new Date(now))
+            });
+          }
+          
+          return isDup;
+        }
+        return false;
+      });
+
+      if (isDuplicate) {
+        console.log(`Skipping duplicate goal/time update:`, {
+          period: goalPeriod,
+          minute: goalMinute,
+          scorer: goal.scorer,
+          score: `${goal.rawScores.away}-${goal.rawScores.home}`,
+          timestamp: formatEasternTime(new Date(now))
+        });
+        return;
+      }
+
+      console.log(`Processing goal with key: ${goalKey}`, {
+        exists: !!previousScores[goalKey],
+        updateCount: previousScores[goalKey]?.updateCount || 0,
+        isPosted: previousScores[goalKey]?.posted || false,
+        timestamp: previousScores[goalKey]?.timestamp ? 
+          formatEasternTime(new Date(previousScores[goalKey].timestamp)) : null,
         currentTime: formatEasternTime(new Date(now))
       });
 
-      if (ageInMinutes > 360 || !isToday(previousScores[goalKey].timestamp)) {
-        console.log(`Force removing old goal ${goalKey}:`, {
-          ageInMinutes,
-          timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp))
-        });
-        delete previousScores[goalKey];
-      }
-    }
+      if (!previousScores[goalKey]) {
+        previousScores[goalKey] = {
+          firstSeen: now,
+          posted: false,
+          updateCount: 0,
+          timestamp: now,
+          goal: goal
+        };
 
-    const goalMinute = goal.time.split(':')[0];
-    const goalPeriod = goal.period;
-    
-    // Check for existing goals that are the same except for seconds
-    const isDuplicate = Object.entries(previousScores).some(([key, value]) => {
-      if (key.startsWith(gameId) && value.posted && isToday(value.timestamp)) {
-        const prevGoal = value.goal;
-        const prevMinute = prevGoal.time.split(':')[0];
-        
-        const isDup = prevGoal.period === goalPeriod && 
-                     prevMinute === goalMinute && 
-                     prevGoal.scorer === goal.scorer &&
-                     prevGoal.rawScores.away === goal.rawScores.away &&
-                     prevGoal.rawScores.home === goal.rawScores.home;
-
-        if (isDup) {
-          console.log(`Found duplicate match with existing goal:`, {
-            existingKey: key,
-            existingTime: formatEasternTime(new Date(value.timestamp)),
-            currentTime: formatEasternTime(new Date(now))
-          });
-        }
-        
-        return isDup;
-      }
-      return false;
-    });
-
-    if (isDuplicate) {
-      console.log(`Skipping duplicate goal/time update:`, {
-        period: goalPeriod,
-        minute: goalMinute,
-        scorer: goal.scorer,
-        score: `${goal.rawScores.away}-${goal.rawScores.home}`,
-        timestamp: formatEasternTime(new Date(now))
-      });
-      return;
-    }
-
-    console.log(`Processing goal with key: ${goalKey}`, {
-      exists: !!previousScores[goalKey],
-      updateCount: previousScores[goalKey]?.updateCount || 0,
-      isPosted: previousScores[goalKey]?.posted || false,
-      timestamp: previousScores[goalKey]?.timestamp ? 
-        formatEasternTime(new Date(previousScores[goalKey].timestamp)) : null,
-      currentTime: formatEasternTime(new Date(now))
-    });
-
-    if (!previousScores[goalKey]) {
-      previousScores[goalKey] = {
-        firstSeen: now,
-        posted: false,
-        updateCount: 0,
-        timestamp: now,
-        goal: goal
-      };
-
-      try {
-        postingInProgress[goalKey] = true;  // Set lock
-        
         console.log(`New goal detected, waiting ${config.INITIAL_DELAY}ms before posting...`);
         await delay(config.INITIAL_DELAY);
 
         const updatedData = await fetchGamePlayByPlay(gameId);
         const updatedGoalPlay = updatedData.plays.find(play => play.eventId === goal.eventId);
 
-        if (updatedGoalPlay && !previousScores[goalKey].posted) {
+        if (updatedGoalPlay && !previousScores[goalKey]?.posted) {
           const message = formatGoalMessage(goal, teams);
           console.log("Attempting to post message:", message);
 
@@ -301,23 +315,16 @@ async function handleGoalUpdate(gameId, goal, teams) {
             timeET: formatEasternTime(new Date(now))
           });
           
-          previousScores[goalKey].posted = true;
-          previousScores[goalKey].timestamp = now;
+          if (previousScores[goalKey]) {  // Check if it still exists
+            previousScores[goalKey].posted = true;
+            previousScores[goalKey].timestamp = now;
+          }
           await delay(config.POST_DELAY);
         } else {
           console.log(`Goal ${goalKey} was either already posted or no longer exists`);
           delete previousScores[goalKey];
         }
-      } catch (error) {
-        console.error(`Error posting goal ${goalKey}:`, error.message);
-        delete previousScores[goalKey];
-      } finally {
-        delete postingInProgress[goalKey];  // Always clear lock
-      }
-    } else if (!previousScores[goalKey].posted) {
-      try {
-        postingInProgress[goalKey] = true;  // Set lock
-        
+      } else if (!previousScores[goalKey].posted) {
         console.log(`Attempting to post previously unposted goal ${goalKey}`);
         const message = formatGoalMessage(goal, teams);
         console.log("Attempting to post message:", message);
@@ -328,21 +335,14 @@ async function handleGoalUpdate(gameId, goal, teams) {
           timeET: formatEasternTime(new Date(now))
         });
         
-        previousScores[goalKey].posted = true;
-        previousScores[goalKey].timestamp = now;
+        if (previousScores[goalKey]) {  // Check if it still exists
+          previousScores[goalKey].posted = true;
+          previousScores[goalKey].timestamp = now;
+        }
         await delay(config.POST_DELAY);
-      } catch (error) {
-        console.error(`Error posting goal ${goalKey}:`, error.message);
-        delete previousScores[goalKey];
-      } finally {
-        delete postingInProgress[goalKey];  // Always clear lock
-      }
-    } else if (previousScores[goalKey].posted && 
-               previousScores[goalKey].updateCount < config.MAX_UPDATES && 
-               isToday(previousScores[goalKey].timestamp)) {
-      try {
-        postingInProgress[goalKey] = true;  // Set lock
-        
+      } else if (previousScores[goalKey].posted && 
+                 previousScores[goalKey].updateCount < config.MAX_UPDATES && 
+                 isToday(previousScores[goalKey].timestamp)) {
         previousScores[goalKey].updateCount++;
         const previousGoal = previousScores[goalKey].goal;
         const updatedFields = getUpdatedFields(goal, previousGoal);
@@ -367,22 +367,21 @@ async function handleGoalUpdate(gameId, goal, teams) {
           previousScores[goalKey].goal = goal;
           previousScores[goalKey].timestamp = now;
         }
-      } catch (error) {
-        console.error(`Error posting update for goal ${goalKey}:`, error.message);
-      } finally {
-        delete postingInProgress[goalKey];  // Always clear lock
+      } else {
+        console.log(`Skipping goal ${goalKey}:`, {
+          reason: previousScores[goalKey]?.posted ? 'already posted and processed' : 'unhandled state',
+          isPosted: previousScores[goalKey]?.posted || false,
+          updates: previousScores[goalKey]?.updateCount || 0,
+          age: Math.round((now - previousScores[goalKey].timestamp) / (1000 * 60)) + ' minutes',
+          timestamp: previousScores[goalKey]?.timestamp ? formatEasternTime(new Date(previousScores[goalKey].timestamp)) : null
+        });
       }
-    } else {
-      console.log(`Skipping goal ${goalKey}:`, {
-        reason: previousScores[goalKey].posted ? 'already posted and processed' : 'unhandled state',
-        isPosted: previousScores[goalKey].posted,
-        updates: previousScores[goalKey]?.updateCount || 0,
-        age: Math.round((now - previousScores[goalKey].timestamp) / (1000 * 60)) + ' minutes',
-        timestamp: formatEasternTime(new Date(previousScores[goalKey].timestamp))
-      });
+    } finally {
+      clearPostingLock(goalKey);
     }
   } catch (error) {
     console.error(`Error in handleGoalUpdate for game ${gameId}:`, error.message);
+    clearPostingLock(goalKey);  // Make sure to clear lock even on outer error
   }
 }
 
