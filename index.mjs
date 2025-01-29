@@ -94,12 +94,22 @@ function safeStringify(obj) {
 }
 
 function getErrorInfo(error) {
-  return {
-    message: error.message,
-    type: error.constructor.name,
-    // Only include first few lines of stack trace to avoid circular refs
-    stack: error.stack?.split('\n').slice(0, 3).join('\n')
-  };
+  try {
+    // Return a new plain object with just the properties we want
+    return {
+      message: String(error.message || ''),
+      type: error.constructor?.name || 'Unknown',
+      // Get first line of stack trace if it exists
+      stack: String(error.stack || '').split('\n')[0] || ''
+    };
+  } catch (e) {
+    // If anything goes wrong, return minimal info
+    return {
+      message: 'Error extracting error details',
+      type: 'Unknown',
+      stack: ''
+    };
+  }
 }
 
 function createGoalKey(gameId, goal) {
@@ -332,38 +342,34 @@ async function handleGoalUpdate(gameId, goal, teams) {
 
           if (updatedGoalPlay && !previousScores[goalKey]?.posted) {
             const message = formatGoalMessage(goal, teams);
-            console.log("Attempting to post new goal message:", message);
+            console.log("Attempting to post message:", message);
 
             try {
-              console.log("Making Bluesky API call for new goal...");
+              console.log("Making Bluesky API call...");
               let postResponse = await bot.post({ text: message });
               
-              // If post fails, try renewing connection once
               if (!postResponse?.uri) {
-                console.log("Post failed - attempting to renew connection");
-                if (await renewBotConnection()) {
-                  postResponse = await bot.post({ text: message });
-                }
+                console.log("Post failed (no URI) - attempting to renew connection");
+                await renewBotConnection();
+                console.log("Connection renewed, retrying post...");
+                postResponse = await bot.post({ text: message });
               }
 
-              console.log("Bluesky API response:", { uri: postResponse?.uri });
-              
               if (postResponse?.uri) {
-                console.log(`Successfully posted goal ${goalKey} to Bluesky`, {
-                  uri: postResponse.uri,
-                  timeET: formatEasternTime(new Date(now))
-                });
-                
+                console.log(`Post successful:`, { uri: postResponse.uri });
                 previousScores[goalKey].posted = true;
                 previousScores[goalKey].timestamp = now;
+                await delay(config.POST_DELAY);
               } else {
-                console.error("No URI in Bluesky response - post may have failed");
+                console.log('Post failed - no URI in response');
+                previousScores[goalKey].posted = false;
               }
-              
-              await delay(config.POST_DELAY);
-            } catch (postError) {
-              console.error("Bluesky posting error:", getErrorInfo(postError));
-              // Leave in previousScores but marked as unposted to retry
+            } catch (error) {
+              const errorInfo = getErrorInfo(error);
+              console.error(`Post failed:`, {
+                message: errorInfo.message,
+                type: errorInfo.type
+              });
               previousScores[goalKey].posted = false;
             }
           } else {
@@ -371,44 +377,43 @@ async function handleGoalUpdate(gameId, goal, teams) {
             delete previousScores[goalKey];
           }
         } catch (error) {
-          console.error(`Error verifying goal ${goalKey}:`, getErrorInfo(error));
+          const errorInfo = getErrorInfo(error);
+          console.error(`Error verifying goal ${goalKey}:`, {
+            message: errorInfo.message,
+            type: errorInfo.type
+          });
           delete previousScores[goalKey];
         }
       } else if (!previousScores[goalKey].posted) {
-        console.log(`Attempting to post previously unposted goal ${goalKey}`);
         const message = formatGoalMessage(goal, teams);
-        console.log("Attempting to post message for unposted goal:", message);
+        console.log("Attempting to post message:", message);
 
         try {
-          console.log("Making Bluesky API call for unposted goal...");
+          console.log("Making Bluesky API call...");
           let postResponse = await bot.post({ text: message });
           
-          // If post fails, try renewing connection once
           if (!postResponse?.uri) {
-            console.log("Post failed - attempting to renew connection");
-            if (await renewBotConnection()) {
-              postResponse = await bot.post({ text: message });
-            }
+            console.log("Post failed (no URI) - attempting to renew connection");
+            await renewBotConnection();
+            console.log("Connection renewed, retrying post...");
+            postResponse = await bot.post({ text: message });
           }
 
-          console.log("Bluesky API response:", { uri: postResponse?.uri });
-          
           if (postResponse?.uri) {
-            console.log(`Successfully posted unposted goal ${goalKey} to Bluesky`, {
-              uri: postResponse.uri,
-              timeET: formatEasternTime(new Date(now))
-            });
-            
+            console.log(`Post successful:`, { uri: postResponse.uri });
             previousScores[goalKey].posted = true;
             previousScores[goalKey].timestamp = now;
+            await delay(config.POST_DELAY);
           } else {
-            console.error("No URI in Bluesky response - post may have failed");
+            console.log('Post failed - no URI in response');
+            previousScores[goalKey].posted = false;
           }
-          
-          await delay(config.POST_DELAY);
-        } catch (postError) {
-          console.error("Bluesky posting error:", getErrorInfo(postError));
-          // Leave in previousScores but marked as unposted to retry
+        } catch (error) {
+          const errorInfo = getErrorInfo(error);
+          console.error(`Post failed:`, {
+            message: errorInfo.message,
+            type: errorInfo.type
+          });
           previousScores[goalKey].posted = false;
         }
       } else if (previousScores[goalKey].posted && 
@@ -431,32 +436,29 @@ async function handleGoalUpdate(gameId, goal, teams) {
           message += `Score: ${goal.score}`;
 
           try {
-            console.log("Making Bluesky API call for goal update...");
+            console.log("Making Bluesky API call for update...");
             let postResponse = await bot.post({ text: message });
             
-            // If post fails, try renewing connection once
             if (!postResponse?.uri) {
-              console.log("Post failed - attempting to renew connection");
-              if (await renewBotConnection()) {
-                postResponse = await bot.post({ text: message });
-              }
+              console.log("Update post failed (no URI) - attempting to renew connection");
+              await renewBotConnection();
+              console.log("Connection renewed, retrying update post...");
+              postResponse = await bot.post({ text: message });
             }
 
-            console.log("Bluesky API response:", { uri: postResponse?.uri });
-            
             if (postResponse?.uri) {
-              console.log(`Successfully posted goal update to Bluesky`, {
-                uri: postResponse.uri,
-                timeET: formatEasternTime(new Date(now))
-              });
-              
+              console.log(`Update post successful:`, { uri: postResponse.uri });
               previousScores[goalKey].goal = goal;
               previousScores[goalKey].timestamp = now;
             } else {
-              console.error("No URI in Bluesky response - post may have failed");
+              console.log('Update post failed - no URI in response');
             }
-          } catch (postError) {
-            console.error("Bluesky posting error:", getErrorInfo(postError));
+          } catch (error) {
+            const errorInfo = getErrorInfo(error);
+            console.error(`Update post failed:`, {
+              message: errorInfo.message,
+              type: errorInfo.type
+            });
           }
         }
       } else {
@@ -472,7 +474,11 @@ async function handleGoalUpdate(gameId, goal, teams) {
       clearPostingLock(goalKey);
     }
   } catch (error) {
-    console.error(`Error in handleGoalUpdate for game ${gameId}:`, getErrorInfo(error));
+    const errorInfo = getErrorInfo(error);
+    console.error(`Error in handleGoalUpdate for game ${gameId}:`, {
+      message: errorInfo.message,
+      type: errorInfo.type
+    });
     clearPostingLock(goalKey);
   }
 }
