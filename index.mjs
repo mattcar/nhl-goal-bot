@@ -209,7 +209,22 @@ function getUpdatedFields(newGoal, oldGoal) {
   return updatedFields;
 }
 
-async function handleGoalUpdate(gameId, goal, teams) {
+async function renewBotConnection() {
+  console.log('Renewing Bluesky connection...');
+  try {
+    await bot.login({
+      identifier: 'nhl-goal-bot.bsky.social',
+      password: process.env.BLUESKY_PASSWORD
+    });
+    console.log('Successfully renewed Bluesky connection');
+    return true;
+  } catch (error) {
+    console.error('Failed to renew Bluesky connection:', error.message);
+    return false;
+  }
+ }
+ 
+ async function handleGoalUpdate(gameId, goal, teams) {
   const goalKey = createGoalKey(gameId, goal);
   
   try {
@@ -312,11 +327,20 @@ async function handleGoalUpdate(gameId, goal, teams) {
  
             try {
               console.log("Making Bluesky API call for new goal...");
-              const postResponse = await bot.post({ text: message });
+              let postResponse = await bot.post({ text: message });
+              
+              // If post fails, try renewing connection once
+              if (!postResponse?.uri) {
+                console.log("Post failed - attempting to renew connection");
+                if (await renewBotConnection()) {
+                  postResponse = await bot.post({ text: message });
+                }
+              }
+ 
               console.log("Raw Bluesky API response:", postResponse);
               
               if (postResponse?.uri) {
-                console.log(`Successfully posted new goal ${goalKey} to Bluesky`, {
+                console.log(`Successfully posted goal ${goalKey} to Bluesky`, {
                   uri: postResponse.uri,
                   timeET: formatEasternTime(new Date(now))
                 });
@@ -324,12 +348,12 @@ async function handleGoalUpdate(gameId, goal, teams) {
                 previousScores[goalKey].posted = true;
                 previousScores[goalKey].timestamp = now;
               } else {
-                console.error("No URI in Bluesky response for new goal - post may have failed:", postResponse);
+                console.error("No URI in Bluesky response - post may have failed:", postResponse);
               }
               
               await delay(config.POST_DELAY);
             } catch (postError) {
-              console.error("Bluesky posting error for new goal:", {
+              console.error("Bluesky posting error:", {
                 error: postError.message,
                 stack: postError.stack,
                 type: postError.constructor.name
@@ -342,7 +366,7 @@ async function handleGoalUpdate(gameId, goal, teams) {
             delete previousScores[goalKey];
           }
         } catch (error) {
-          console.error(`Error verifying new goal ${goalKey}:`, error.message);
+          console.error(`Error verifying goal ${goalKey}:`, error.message);
           delete previousScores[goalKey];
         }
       } else if (!previousScores[goalKey].posted) {
@@ -352,8 +376,17 @@ async function handleGoalUpdate(gameId, goal, teams) {
  
         try {
           console.log("Making Bluesky API call for unposted goal...");
-          const postResponse = await bot.post({ text: message });
-          console.log("Raw Bluesky API response for unposted goal:", postResponse);
+          let postResponse = await bot.post({ text: message });
+          
+          // If post fails, try renewing connection once
+          if (!postResponse?.uri) {
+            console.log("Post failed - attempting to renew connection");
+            if (await renewBotConnection()) {
+              postResponse = await bot.post({ text: message });
+            }
+          }
+ 
+          console.log("Raw Bluesky API response:", postResponse);
           
           if (postResponse?.uri) {
             console.log(`Successfully posted unposted goal ${goalKey} to Bluesky`, {
@@ -364,12 +397,12 @@ async function handleGoalUpdate(gameId, goal, teams) {
             previousScores[goalKey].posted = true;
             previousScores[goalKey].timestamp = now;
           } else {
-            console.error("No URI in Bluesky response for unposted goal - post may have failed:", postResponse);
+            console.error("No URI in Bluesky response - post may have failed:", postResponse);
           }
           
           await delay(config.POST_DELAY);
         } catch (postError) {
-          console.error("Bluesky posting error for unposted goal:", {
+          console.error("Bluesky posting error:", {
             error: postError.message,
             stack: postError.stack,
             type: postError.constructor.name
@@ -398,11 +431,20 @@ async function handleGoalUpdate(gameId, goal, teams) {
  
           try {
             console.log("Making Bluesky API call for goal update...");
-            const postResponse = await bot.post({ text: message });
-            console.log("Raw Bluesky API response for goal update:", postResponse);
+            let postResponse = await bot.post({ text: message });
+            
+            // If post fails, try renewing connection once
+            if (!postResponse?.uri) {
+              console.log("Post failed - attempting to renew connection");
+              if (await renewBotConnection()) {
+                postResponse = await bot.post({ text: message });
+              }
+            }
+ 
+            console.log("Raw Bluesky API response:", postResponse);
             
             if (postResponse?.uri) {
-              console.log(`Successfully posted goal update ${goalKey} to Bluesky`, {
+              console.log(`Successfully posted goal update to Bluesky`, {
                 uri: postResponse.uri,
                 timeET: formatEasternTime(new Date(now))
               });
@@ -410,10 +452,10 @@ async function handleGoalUpdate(gameId, goal, teams) {
               previousScores[goalKey].goal = goal;
               previousScores[goalKey].timestamp = now;
             } else {
-              console.error("No URI in Bluesky response for goal update - post may have failed:", postResponse);
+              console.error("No URI in Bluesky response - post may have failed:", postResponse);
             }
           } catch (postError) {
-            console.error("Bluesky posting error for goal update:", {
+            console.error("Bluesky posting error:", {
               error: postError.message,
               stack: postError.stack,
               type: postError.constructor.name
