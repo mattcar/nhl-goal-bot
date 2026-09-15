@@ -1,0 +1,17 @@
+# Render Blueprint: deploy with "New > Blueprint" and point it at this repo.
+services:
+  - type: worker
+    name: nhl-goal-bot
+    runtime: node
+    buildCommand: npm ci
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: BLUESKY_IDENTIFIER
+        value: nhl-goal-bot.bsky.social
+      - key: BLUESKY_PASSWORD
+        sync: false # set manually in the Render dashboard (secret)
+      # Optional tuning (defaults apply if unset):
+      # - key: POLL_INTERVAL_MS
+      #   value: 45000
