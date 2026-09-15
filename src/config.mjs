@@ -1,9 +1,40 @@
 /**
  * Configuration, loaded from environment variables with validation.
  * Throws on missing/invalid values so misconfiguration fails fast at startup.
+ *
+ * A `.env` file in the working directory is loaded first (if present) so
+ * `cp .env.example .env` just works. Real environment variables take
+ * precedence over `.env` values.
  */
 
+import { readFileSync } from 'node:fs';
+
+function loadDotEnv(path = '.env') {
+  let raw;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return;
+  }
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = value;
+  }
+}
+
 export function loadConfig(env = process.env) {
+  if (env === process.env) loadDotEnv();
   const num = (name, def) => {
     const raw = env[name];
     if (raw == null || raw === '') return def;
