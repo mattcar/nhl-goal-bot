@@ -1,19 +1,18 @@
 {
-  "name": "nhl-goal-bot",
-  "version": "1.0.0",
-  "description": "NHL Goal Bot for Bluesky",
-  "main": "index.mjs",
-  "type": "module",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "author": "",
-  "license": "MIT", 
   "dependencies": {
-    "@skyware/bot": "^0.1.3",
-    "node-fetch": "^3.3.2"
+    "@skyware/bot": "^0.4.1"
   },
+  "description": "Posts NHL goals to Bluesky",
   "engines": {
-    "node": "22.x" 
-  }
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "main": "index.mjs",
+  "name": "nhl-goal-bot",
+  "scripts": {
+    "start": "node index.mjs",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "type": "module",
+  "version": "2.0.0"
 }
