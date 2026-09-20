@@ -45,6 +45,7 @@ Render/Railway/Fly health checks).
 - `src/nhl.mjs` — thin client for the NHL web API
 - `src/goals.mjs` — goal parsing, dedup identity, message formatting (pure, tested)
 - `src/store.mjs` — JSON-backed record of seen goals; restarts don't repost
+- `src/backfill.mjs` — cold-start safety net: rebuilds posted state from the bot's own Bluesky feed if the store is empty (e.g. disk was wiped)
 - `src/bluesky.mjs` — single post path with session re-login retry
 - `src/time.mjs` — Eastern Time day boundaries via `Intl` (DST-safe)
 - `src/config.mjs` — validated env config

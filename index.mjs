@@ -26,6 +26,7 @@ import { GoalStore } from './src/store.mjs';
 import { BlueskyPoster } from './src/bluesky.mjs';
 import { GameTracker } from './src/game-tracker.mjs';
 import { retryForever } from './src/retry.mjs';
+import { seedStoreFromFeed } from './src/backfill.mjs';
 import { etDayKey, isSameETDay, ageMinutes, formatET } from './src/time.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -84,6 +85,41 @@ async function main() {
     },
   });
   health.state = 'ready';
+
+  if (store.size === 0) {
+    // Cold start: the disk may have been wiped (or this is a first deploy).
+    // Rebuild "already posted" state from our own Bluesky feed so a restart
+    // mid-game doesn't repost every goal.
+    log('Goal store is empty, attempting backfill from Bluesky feed');
+    try {
+      const seeded = await seedStoreFromFeed({
+        store,
+        actor: config.blueskyIdentifier,
+        getGames: async () => {
+          const games = [];
+          const schedule = await nhl.getSchedule();
+          for (const gameId of nhl.liveGameIds(schedule)) {
+            try {
+              const pbp = await nhl.getPlayByPlay(gameId);
+              games.push({
+                gameId,
+                teams: { away: pbp.awayTeam.abbrev, home: pbp.homeTeam.abbrev },
+                goals: extractGoals(pbp),
+              });
+            } catch (err) {
+              log(`Backfill: skipping game ${gameId}: ${err.message}`);
+            }
+          }
+          return games;
+        },
+      });
+      if (seeded > 0) await store.save();
+      log(`Backfill complete, marked ${seeded} goal(s) as posted`);
+    } catch (err) {
+      log(`Backfill failed, continuing with empty store: ${err.message}`);
+    }
+  }
+
   log('Logged in to Bluesky');
 
   /** Goal keys currently being handled; the poll loop never awaits these. */
