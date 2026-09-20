@@ -5,6 +5,8 @@
  * game fetch play-by-play and handle every goal play. Each goal is verified
  * (re-fetched after INITIAL_DELAY_MS to catch quick stat corrections),
  * posted once, then watched for corrections up to MAX_UPDATES times.
+ * Games that drop out of the live list get one final sweep so end-of-game
+ * goals (late regulation, OT winners) are not missed.
  *
  * State persists in GOAL_STORE_PATH so restarts don't repost goals.
  */
@@ -22,6 +24,7 @@ import {
 } from './src/goals.mjs';
 import { GoalStore } from './src/store.mjs';
 import { BlueskyPoster } from './src/bluesky.mjs';
+import { GameTracker } from './src/game-tracker.mjs';
 import { etDayKey, isSameETDay, ageMinutes, formatET } from './src/time.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -47,6 +50,9 @@ async function main() {
 
   /** Goal keys currently being handled; the poll loop never awaits these. */
   const inFlight = new Set();
+
+  /** Games seen LIVE, so just-ended games get one final sweep. */
+  const gameTracker = new GameTracker();
 
   /** Exact key hit, else a fuzzy match for a re-issued event id. */
   function findRecord(gameId, goal) {
@@ -132,6 +138,26 @@ async function main() {
     const schedule = await nhl.getSchedule();
     const liveIds = nhl.liveGameIds(schedule);
     if (liveIds.length > 0) log('Live games:', liveIds);
+
+    // Final sweep for games that just ended: the NHL API records
+    // last-second goals (late regulation, OT winners) right as the game
+    // state flips away from LIVE, so without this they would never post.
+    for (const gameId of gameTracker.endedGames(liveIds)) {
+      try {
+        const pbp = await nhl.getPlayByPlay(gameId);
+        const teams = { home: pbp.homeTeam.abbrev, away: pbp.awayTeam.abbrev };
+        log(`Final sweep for ended game ${gameId}`);
+        for (const goal of extractGoals(pbp)) {
+          // Fire and forget, same as the live loop below.
+          handleGoal(gameId, goal, teams).catch((err) =>
+            log(`Goal handler crashed: ${err.message}`),
+          );
+        }
+      } catch (err) {
+        log(`Final sweep failed for game ${gameId}: ${err.message}`);
+      }
+    }
+
     for (const gameId of liveIds) {
       try {
         const pbp = await nhl.getPlayByPlay(gameId);
