@@ -5,9 +5,17 @@ services:
     runtime: node
     buildCommand: npm ci
     startCommand: npm start
+    # Persistent disk so posted-goals.json survives restarts/redeploys.
+    # NOTE: disks require a paid instance type (Starter or higher).
+    disk:
+      name: goal-store
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: 22
+      - key: GOAL_STORE_PATH
+        value: /data/posted-goals.json
       - key: BLUESKY_IDENTIFIER
         value: nhl-goal-bot.bsky.social
       - key: BLUESKY_PASSWORD
