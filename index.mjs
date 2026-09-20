@@ -25,6 +25,7 @@ import {
 import { GoalStore } from './src/store.mjs';
 import { BlueskyPoster } from './src/bluesky.mjs';
 import { GameTracker } from './src/game-tracker.mjs';
+import { retryForever } from './src/retry.mjs';
 import { etDayKey, isSameETDay, ageMinutes, formatET } from './src/time.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,7 +46,44 @@ async function main() {
   pruneOldGoals(store, config);
   await store.save();
 
-  await poster.login();
+  // Health reporting starts before anything that can fail and kill the
+  // process, so a bad deploy or an upstream outage is visible instead of
+  // just a crash loop. 200 = ready, 503 = still starting or degraded.
+  const health = {
+    state: 'starting', // starting | ready | degraded
+    startedAt: Date.now(),
+    lastTickAt: null,
+    lastTickOk: null,
+    goalsPosted: 0,
+  };
+  const server = http.createServer((req, res) => {
+    const body = JSON.stringify({
+      status: health.state === 'ready' ? 'ok' : health.state,
+      uptimeSec: Math.floor((Date.now() - health.startedAt) / 1000),
+      lastTickAt: health.lastTickAt ? new Date(health.lastTickAt).toISOString() : null,
+      lastTickOk: health.lastTickOk,
+      goalsPosted: health.goalsPosted,
+    });
+    res.writeHead(health.state === 'ready' ? 200 : 503, {
+      'Content-Type': 'application/json',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Content-Security-Policy': "default-src 'none'",
+    });
+    res.end(body);
+  });
+  server.listen(config.port, () => log(`Health check listening on port ${config.port}`));
+
+  // A failed login used to be fatal (exit 1 -> Render restart -> crash loop
+  // if Bluesky is down or the password is wrong). Now we stay up and keep
+  // retrying with backoff; the health endpoint reports "degraded" meanwhile.
+  await retryForever(() => poster.login(), {
+    onError: (err, waitMs, attempt) => {
+      health.state = 'degraded';
+      log(`Bluesky login failed (attempt ${attempt}), retrying in ${Math.round(waitMs / 1000)}s: ${err.message}`);
+    },
+  });
+  health.state = 'ready';
   log('Logged in to Bluesky');
 
   /** Goal keys currently being handled; the poll loop never awaits these. */
@@ -110,6 +148,7 @@ async function main() {
       const response = await poster.post(formatGoalMessage(goal, teams));
       rec.posted = true;
       rec.timestamp = Date.now();
+      health.goalsPosted += 1;
       await store.save();
       log(`Posted goal ${key}`, { uri: response.uri });
       await delay(config.postDelayMs);
@@ -186,24 +225,17 @@ async function main() {
         log(`New ET day, pruned ${removed} old goal record(s)`);
       }
       await pollGames();
+      health.lastTickAt = Date.now();
+      health.lastTickOk = true;
     } catch (err) {
+      health.lastTickAt = Date.now();
+      health.lastTickOk = false;
       log(`Poll cycle failed: ${err.message}`);
     }
   }
 
   await tick();
   const timer = setInterval(tick, config.pollIntervalMs);
-
-  const server = http.createServer((req, res) => {
-    res.writeHead(200, {
-      'Content-Type': 'text/plain',
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-      'Content-Security-Policy': "default-src 'none'",
-    });
-    res.end('NHL Goal Bot is running!');
-  });
-  server.listen(config.port, () => log(`Health check listening on port ${config.port}`));
 
   for (const signal of ['SIGTERM', 'SIGINT']) {
     process.on(signal, () => {
