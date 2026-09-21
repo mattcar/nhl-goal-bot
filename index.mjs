@@ -125,8 +125,19 @@ async function main() {
   /** Goal keys currently being handled; the poll loop never awaits these. */
   const inFlight = new Set();
 
-  /** Games seen LIVE, so just-ended games get one final sweep. */
-  const gameTracker = new GameTracker();
+  /**
+   * Games seen LIVE, so just-ended games get one final sweep. The live set
+   * is restored from the store so a restart landing exactly on a game ending
+   * doesn't skip that game's final sweep. Stale snapshots (long downtime)
+   * are discarded by fromSnapshot — sweeping those games could repost goals
+   * whose records were already pruned.
+   */
+  const gameTracker = GameTracker.fromSnapshot(store.getMeta('gameTracker'), {
+    maxAgeMs: config.scoreMaxAgeMs,
+  });
+  if (gameTracker.recentlyLive.size > 0) {
+    log('Restored game tracker live set', [...gameTracker.recentlyLive]);
+  }
 
   /** Exact key hit, else a fuzzy match for a re-issued event id. */
   function findRecord(gameId, goal) {
@@ -268,6 +279,10 @@ async function main() {
       health.lastTickOk = false;
       log(`Poll cycle failed: ${err.message}`);
     }
+    // Persist the live set every cycle (tiny atomic write) so a restart
+    // keeps final-sweep coverage for games ending around the restart.
+    store.setMeta('gameTracker', gameTracker.toJSON());
+    await store.save();
   }
 
   await tick();

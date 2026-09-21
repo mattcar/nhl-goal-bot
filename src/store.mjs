@@ -3,15 +3,26 @@
  * everything. Stored as JSON on disk, written atomically.
  *
  * Record shape: { goal, posted, updateCount, firstSeen, timestamp }
+ *
+ * The same file also holds small non-goal metadata under reserved keys
+ * starting with META_PREFIX (e.g. the game tracker's live set), so there is
+ * one durable file to configure and back up. Goal keys are
+ * `<gameId>:<eventId>`, so the prefix can never collide. Metadata is
+ * excluded from size, entries(), and prune() — goal-record consumers never
+ * see it.
  */
 
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+/** Reserved key prefix for non-goal metadata in the store file. */
+const META_PREFIX = '__meta:';
+
 export class GoalStore {
   constructor(path) {
     this.path = path;
     this.records = new Map();
+    this.meta = new Map();
   }
 
   async load() {
@@ -19,7 +30,11 @@ export class GoalStore {
       const raw = await readFile(this.path, 'utf8');
       const parsed = JSON.parse(raw);
       for (const [key, record] of Object.entries(parsed)) {
-        this.records.set(key, record);
+        if (key.startsWith(META_PREFIX)) {
+          this.meta.set(key.slice(META_PREFIX.length), record);
+        } else {
+          this.records.set(key, record);
+        }
       }
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
@@ -31,7 +46,11 @@ export class GoalStore {
   async save() {
     await mkdir(dirname(this.path), { recursive: true });
     const tmp = `${this.path}.tmp`;
-    await writeFile(tmp, JSON.stringify(Object.fromEntries(this.records), null, 2));
+    const data = Object.fromEntries(this.records);
+    for (const [key, value] of this.meta) {
+      data[`${META_PREFIX}${key}`] = value;
+    }
+    await writeFile(tmp, JSON.stringify(data, null, 2));
     await rename(tmp, this.path);
   }
 
@@ -53,6 +72,16 @@ export class GoalStore {
 
   get size() {
     return this.records.size;
+  }
+
+  /** Read a metadata value (e.g. 'gameTracker'); undefined when absent. */
+  getMeta(key) {
+    return this.meta.get(key);
+  }
+
+  /** Write a metadata value. Call save() afterwards to persist. */
+  setMeta(key, value) {
+    this.meta.set(key, value);
   }
 
   /** Iterate [key, record] pairs (e.g. for fuzzy matching). */
