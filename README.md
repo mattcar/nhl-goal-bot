@@ -26,7 +26,7 @@ use your main account password.
 | `POST_DELAY_MS` | `60000` | Cooldown after each post |
 | `MAX_UPDATES` | `2` | Max correction posts per goal |
 | `SCORE_MAX_AGE_MS` | `14400000` (4h) | How long goal records are kept |
-| `GOAL_STORE_PATH` | `./data/posted-goals.json` | Persistent goal record file |
+| `GOAL_STORE_PATH` | `./data/posted-goals.json` | Persistent goal record + tracker state file |
 | `NHL_API_BASE_URL` | `https://api-web.nhle.com/v1` | NHL API endpoint |
 | `PORT` | `10000` | Health-check HTTP port |
 
@@ -44,7 +44,8 @@ Render/Railway/Fly health checks).
 
 - `src/nhl.mjs` — thin client for the NHL web API
 - `src/goals.mjs` — goal parsing, dedup identity, message formatting (pure, tested)
-- `src/store.mjs` — JSON-backed record of seen goals; restarts don't repost
+- `src/store.mjs` — JSON-backed record of seen goals, plus namespaced metadata (the game tracker's live set); restarts don't repost
+- `src/game-tracker.mjs` — remembers live games for the end-of-game sweep; the live set persists in the store so restarts don't lose it
 - `src/backfill.mjs` — cold-start safety net: rebuilds posted state from the bot's own Bluesky feed if the store is empty (e.g. disk was wiped)
 - `src/bluesky.mjs` — single post path with session re-login retry
 - `src/time.mjs` — Eastern Time day boundaries via `Intl` (DST-safe)
