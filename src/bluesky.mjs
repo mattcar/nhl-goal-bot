@@ -16,7 +16,11 @@ export class BlueskyPoster {
     this.identifier = identifier;
     this.password = password;
     this.maxLoginRetries = maxLoginRetries;
-    this.bot = new Bot();
+    // We only post; we never consume the library's notification/reply
+    // events. Leave its background event poller off: poll failures are
+    // re-emitted as 'error' events with no listener, which crashes the
+    // process (a transient Bluesky 502 did exactly this on 2026-09-21).
+    this.bot = new Bot({ emitEvents: false });
   }
 
   async login() {
