@@ -99,3 +99,49 @@ describe('GoalStore metadata', () => {
     assert.equal(store.getMeta('gameTracker'), undefined);
   });
 });
+
+describe('GoalStore concurrent saves', () => {
+  let dir;
+  let path;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'goalstore-race-'));
+    path = join(dir, 'goals.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('serializes concurrent saves instead of crashing with ENOENT', async () => {
+    // Regression: 2026-09-21 production crash — a periodic tick save raced a
+    // goal-post save on the shared tmp file and the losing rename threw
+    // ENOENT, killing the process.
+    const store = await new GoalStore(path).load();
+    await Promise.all(
+      Array.from({ length: 60 }, (_, i) => {
+        store.set(`game:${i}`, { goal: { scorer: 'Racer' }, posted: true });
+        return store.save();
+      }),
+    );
+
+    const reloaded = await new GoalStore(path).load();
+    assert.equal(reloaded.size, 60);
+  });
+
+  it('a failed save does not break the queue for later saves', async () => {
+    // A regular file blocks the directory the save needs to create, so this
+    // save must fail — but the next save on a healthy store still works.
+    const { writeFile } = await import('node:fs/promises');
+    const blocker = join(dir, 'blocker');
+    await writeFile(blocker, 'x');
+    const bad = new GoalStore(join(blocker, 'goals.json'));
+    await assert.rejects(() => bad.save());
+
+    const store = await new GoalStore(path).load();
+    store.set('1:1', { posted: true });
+    await store.save();
+    const reloaded = await new GoalStore(path).load();
+    assert.equal(reloaded.size, 1);
+  });
+});

@@ -23,6 +23,12 @@ export class GoalStore {
     this.path = path;
     this.records = new Map();
     this.meta = new Map();
+    // Serializes save() calls into a queue. The tmp+rename atomic-write
+    // pattern is only safe when one save runs at a time: two overlapping
+    // saves share one tmp path, so the first rename removes the file the
+    // second rename expects, crashing the process with ENOENT. (Seen in
+    // production 2026-09-21 when a periodic tick save raced a goal-post save.)
+    this._saveQueue = Promise.resolve();
   }
 
   async load() {
@@ -43,7 +49,20 @@ export class GoalStore {
     return this;
   }
 
+  /**
+   * Persist the store. Safe to call concurrently: saves are queued and run
+   * one at a time, so overlapping callers (e.g. the periodic tick and a
+   * goal-post handler) can't interleave on the shared tmp file. The returned
+   * promise resolves once this call's save has landed. A failed save does
+   * not break the queue for later saves.
+   */
   async save() {
+    const run = this._saveQueue.catch(() => {}).then(() => this._doSave());
+    this._saveQueue = run.catch(() => {});
+    return run;
+  }
+
+  async _doSave() {
     await mkdir(dirname(this.path), { recursive: true });
     const tmp = `${this.path}.tmp`;
     const data = Object.fromEntries(this.records);
