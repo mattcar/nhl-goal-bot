@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GoalStore } from '../src/store.mjs';
+import { GoalStore, pruneOldGoals } from '../src/store.mjs';
 
 describe('GoalStore', () => {
   let dir;
@@ -143,5 +143,70 @@ describe('GoalStore concurrent saves', () => {
     await store.save();
     const reloaded = await new GoalStore(path).load();
     assert.equal(reloaded.size, 1);
+  });
+});
+
+describe('pruneOldGoals', () => {
+  // Fixed "now": 2026-09-23T04:30:00Z = 00:30 ET on Sep 23, just after the ET
+  // midnight flip that caused the 2026-09-23 duplicate incident.
+  const NOW = new Date('2026-09-23T04:30:00Z').getTime();
+  const config = { scoreMaxAgeMs: 4 * 60 * 60 * 1000 };
+  const GAME = 2026010030; // numeric, like NhlClient.liveGameIds returns
+
+  let dir;
+  let path;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'prune-'));
+    path = join(dir, 'goals.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function storeWith(records) {
+    const store = await new GoalStore(path).load();
+    for (const [key, timestamp] of records) {
+      store.set(key, { goal: { scorer: 'S' }, posted: true, timestamp });
+    }
+    return store;
+  }
+
+  it('prunes records older than SCORE_MAX_AGE_MS', async () => {
+    const store = await storeWith([[`${GAME}:1`, NOW - 5 * 60 * 60 * 1000]]);
+    assert.equal(pruneOldGoals(store, config, [], { now: NOW }), 1);
+    assert.equal(store.size, 0);
+  });
+
+  it('prunes fresh records from a previous ET day', async () => {
+    // 22:30 ET Sep 22 — only 2h old, but a different ET day than NOW.
+    const store = await storeWith([[`${GAME}:1`, new Date('2026-09-23T02:30:00Z').getTime()]]);
+    assert.equal(pruneOldGoals(store, config, [], { now: NOW }), 1);
+    assert.equal(store.size, 0);
+  });
+
+  it("keeps a live game's records across ET midnight (2026-09-23 dup regression)", async () => {
+    const store = await storeWith([[`${GAME}:1`, new Date('2026-09-23T02:30:00Z').getTime()]]);
+    assert.equal(pruneOldGoals(store, config, [GAME], { now: NOW }), 0);
+    assert.equal(store.size, 1);
+  });
+
+  it("keeps a live game's records past max age (multi-OT playoff games)", async () => {
+    const store = await storeWith([[`${GAME}:1`, NOW - 5.5 * 60 * 60 * 1000]]);
+    assert.equal(pruneOldGoals(store, config, [GAME], { now: NOW }), 0);
+    assert.equal(store.size, 1);
+  });
+
+  it('keeps fresh records from the current ET day', async () => {
+    const store = await storeWith([[`${GAME}:1`, NOW - 30 * 60 * 1000]]);
+    assert.equal(pruneOldGoals(store, config, [], { now: NOW }), 0);
+    assert.equal(store.size, 1);
+  });
+
+  it('matches protected game ids regardless of number/string type', async () => {
+    const store = await storeWith([[`${GAME}:1`, NOW - 5 * 60 * 60 * 1000]]);
+    assert.equal(pruneOldGoals(store, config, [String(GAME)], { now: NOW }), 0);
+    assert.equal(store.size, 1);
   });
 });

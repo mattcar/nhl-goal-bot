@@ -22,12 +22,12 @@ import {
   formatGoalMessage,
   formatCorrectionMessage,
 } from './src/goals.mjs';
-import { GoalStore } from './src/store.mjs';
+import { GoalStore, pruneOldGoals } from './src/store.mjs';
 import { BlueskyPoster } from './src/bluesky.mjs';
 import { GameTracker } from './src/game-tracker.mjs';
 import { retryForever } from './src/retry.mjs';
 import { seedStoreFromFeed } from './src/backfill.mjs';
-import { etDayKey, isSameETDay, ageMinutes, formatET } from './src/time.mjs';
+import { etDayKey, isSameETDay, formatET } from './src/time.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (message, data) => {
@@ -44,7 +44,17 @@ async function main() {
   });
   const store = await new GoalStore(config.storePath).load();
 
-  pruneOldGoals(store, config);
+  // Protect currently-live games from the prune below: a restart landing
+  // across ET midnight must not wipe a game in progress — the next poll
+  // would repost every goal as new. Best-effort; a schedule fetch failure
+  // just falls back to the unprotected prune.
+  let liveNow = [];
+  try {
+    liveNow = nhl.liveGameIds(await nhl.getSchedule());
+  } catch (err) {
+    log(`Startup: couldn't fetch live games to protect from prune: ${err.message}`);
+  }
+  pruneOldGoals(store, config, liveNow);
   await store.save();
 
   // Health reporting starts before anything that can fail and kill the
@@ -267,7 +277,10 @@ async function main() {
       const today = etDayKey();
       if (today !== lastDay) {
         lastDay = today;
-        const removed = pruneOldGoals(store, config);
+        // Games seen live on the previous poll may still be in progress
+        // across the ET midnight boundary — never prune their records, or
+        // the next poll reposts every goal as new.
+        const removed = pruneOldGoals(store, config, gameTracker.recentlyLive);
         await store.save();
         log(`New ET day, pruned ${removed} old goal record(s)`);
       }
@@ -296,15 +309,6 @@ async function main() {
       setTimeout(() => process.exit(0), 5000).unref();
     });
   }
-}
-
-/** Drop records older than SCORE_MAX_AGE_MS or from a previous ET day. */
-function pruneOldGoals(store, config) {
-  const now = Date.now();
-  const maxAgeMinutes = config.scoreMaxAgeMs / 60_000;
-  return store.prune(
-    (record) => ageMinutes(record.timestamp, now) > maxAgeMinutes || !isSameETDay(record.timestamp, now),
-  );
 }
 
 main().catch((err) => {

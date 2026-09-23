@@ -14,6 +14,7 @@
 
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { ageMinutes, isSameETDay } from './time.mjs';
 
 /** Reserved key prefix for non-goal metadata in the store file. */
 const META_PREFIX = '__meta:';
@@ -122,4 +123,25 @@ export class GoalStore {
     }
     return removed;
   }
+}
+
+/**
+ * Drop goal records older than SCORE_MAX_AGE_MS or from a previous ET day —
+ * except for games in `protectedGameIds` (currently in progress). A game can
+ * span ET midnight (late West Coast starts; the 2026-09-23 dup incident, when
+ * the midnight prune wiped a live game's records and all six goals reposted)
+ * or run past the max age (multi-OT playoff games), and pruning its records
+ * mid-game makes the next poll repost every goal as new.
+ *
+ * `protectedGameIds` accepts numbers or strings; goal keys are
+ * "<gameId>:<eventId>" strings, so ids are normalized before comparing.
+ */
+export function pruneOldGoals(store, config, protectedGameIds = [], { now = Date.now() } = {}) {
+  const maxAgeMinutes = config.scoreMaxAgeMs / 60_000;
+  const protectedIds = new Set([...protectedGameIds].map(String));
+  return store.prune(
+    (record, key) =>
+      !protectedIds.has(key.split(':')[0]) &&
+      (ageMinutes(record.timestamp, now) > maxAgeMinutes || !isSameETDay(record.timestamp, now)),
+  );
 }
