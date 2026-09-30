@@ -5,8 +5,9 @@
  * game fetch play-by-play and handle every goal play. Each goal is verified
  * (re-fetched after INITIAL_DELAY_MS to catch quick stat corrections),
  * posted once, then watched for corrections up to MAX_UPDATES times.
- * Games that drop out of the live list get one final sweep so end-of-game
- * goals (late regulation, OT winners) are not missed.
+ * Games that drop out of the live list get a final sweep — re-run for a
+ * while afterwards — so end-of-game goals (late regulation, OT winners)
+ * are not missed when the NHL API is slow to record them.
  *
  * State persists in GOAL_STORE_PATH so restarts don't repost goals.
  */
@@ -136,14 +137,16 @@ async function main() {
   const inFlight = new Set();
 
   /**
-   * Games seen LIVE, so just-ended games get one final sweep. The live set
-   * is restored from the store so a restart landing exactly on a game ending
-   * doesn't skip that game's final sweep. Stale snapshots (long downtime)
-   * are discarded by fromSnapshot — sweeping those games could repost goals
-   * whose records were already pruned.
+   * Games seen LIVE, so just-ended games get a final sweep — re-run for a
+   * while afterwards in case the NHL API is slow to record last-second
+   * goals. The live set is restored from the store so a restart landing
+   * exactly on a game ending doesn't skip that game's final sweep. Stale
+   * snapshots (long downtime) are discarded by fromSnapshot — sweeping
+   * those games could repost goals whose records were already pruned.
    */
   const gameTracker = GameTracker.fromSnapshot(store.getMeta('gameTracker'), {
     maxAgeMs: config.scoreMaxAgeMs,
+    sweepWindowMs: config.sweepWindowMs,
   });
   if (gameTracker.recentlyLive.size > 0) {
     log('Restored game tracker live set', [...gameTracker.recentlyLive]);
@@ -235,14 +238,17 @@ async function main() {
     const liveIds = nhl.liveGameIds(schedule);
     if (liveIds.length > 0) log('Live games:', liveIds);
 
-    // Final sweep for games that just ended: the NHL API records
-    // last-second goals (late regulation, OT winners) right as the game
-    // state flips away from LIVE, so without this they would never post.
-    for (const gameId of gameTracker.endedGames(liveIds)) {
+    // Final sweep for games that just ended — re-run for a while
+    // afterwards. The NHL API records last-second goals (late regulation,
+    // OT winners) right as the game state flips away from LIVE, and on busy
+    // nights it can take several more minutes; a single sweep at the final
+    // horn misses those goals. Re-sweeping is safe: posted goals are never
+    // posted twice.
+    for (const gameId of gameTracker.gamesToSweep(liveIds)) {
       try {
         const pbp = await nhl.getPlayByPlay(gameId);
         const teams = { home: pbp.homeTeam.abbrev, away: pbp.awayTeam.abbrev };
-        log(`Final sweep for ended game ${gameId}`);
+        log(`Sweeping ended game ${gameId}`);
         for (const goal of extractGoals(pbp)) {
           // Fire and forget, same as the live loop below.
           handleGoal(gameId, goal, teams).catch((err) =>
@@ -250,7 +256,7 @@ async function main() {
           );
         }
       } catch (err) {
-        log(`Final sweep failed for game ${gameId}: ${err.message}`);
+        log(`Sweep failed for game ${gameId}: ${err.message}`);
       }
     }
 

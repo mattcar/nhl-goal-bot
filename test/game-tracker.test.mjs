@@ -112,3 +112,76 @@ describe('GameTracker persistence', () => {
     }
   });
 });
+
+describe('GameTracker re-sweeps', () => {
+  const MIN = 60_000;
+  const T0 = new Date('2026-09-30T01:00:00-04:00').getTime();
+  const WINDOW = 20 * MIN;
+
+  it('sweeps newly ended games', () => {
+    const tracker = new GameTracker({ sweepWindowMs: WINDOW });
+    tracker.gamesToSweep([1, 2], { now: T0 });
+    assert.deepEqual(tracker.gamesToSweep([1], { now: T0 + MIN }), [2]);
+  });
+
+  it('keeps re-sweeping recently ended games within the window', () => {
+    const tracker = new GameTracker({ sweepWindowMs: WINDOW });
+    tracker.gamesToSweep([1, 2], { now: T0 });
+    assert.deepEqual(tracker.gamesToSweep([1], { now: T0 + MIN }), [2]);
+    // Still eligible 19 minutes later.
+    assert.deepEqual(tracker.gamesToSweep([1], { now: T0 + 19 * MIN }), [2]);
+  });
+
+  it('drops games whose sweep window expired', () => {
+    const tracker = new GameTracker({ sweepWindowMs: WINDOW });
+    tracker.gamesToSweep([1, 2], { now: T0 });
+    assert.deepEqual(tracker.gamesToSweep([1], { now: T0 + MIN }), [2]);
+    // 21 minutes after the game ended the window has expired.
+    assert.deepEqual(tracker.gamesToSweep([1], { now: T0 + 22 * MIN }), []);
+    // And it stays dropped.
+    assert.deepEqual(tracker.gamesToSweep([1], { now: T0 + 23 * MIN }), []);
+  });
+
+  it('does not re-sweep games that are live again', () => {
+    const tracker = new GameTracker({ sweepWindowMs: WINDOW });
+    tracker.gamesToSweep([1, 2], { now: T0 });
+    assert.deepEqual(tracker.gamesToSweep([1], { now: T0 + MIN }), [2]);
+    // Game 2 shows up live again (API flakiness): no longer a sweep target.
+    assert.deepEqual(tracker.gamesToSweep([1, 2], { now: T0 + 2 * MIN }), []);
+    // If it ends again it gets a fresh window.
+    assert.deepEqual(tracker.gamesToSweep([1], { now: T0 + 3 * MIN }), [2]);
+    assert.deepEqual(tracker.gamesToSweep([1], { now: T0 + 3 * MIN + WINDOW + 1 }), []);
+  });
+
+  it('round-trips recently-ended games through toJSON/fromSnapshot', () => {
+    const tracker = new GameTracker({ sweepWindowMs: WINDOW });
+    tracker.gamesToSweep([1, 2], { now: T0 });
+    tracker.gamesToSweep([1], { now: T0 + MIN });
+    const json = tracker.toJSON();
+
+    const restored = GameTracker.fromSnapshot(json, {
+      maxAgeMs: 4 * 3600 * 1000,
+      sweepWindowMs: WINDOW,
+      now: T0 + 2 * MIN,
+    });
+    // Game 2 ended ~2 minutes ago: still within the re-sweep window.
+    assert.deepEqual(restored.gamesToSweep([1], { now: T0 + 2 * MIN }), [2]);
+  });
+
+  it('restores an empty recently-ended set from old snapshots', () => {
+    const tracker = new GameTracker({ sweepWindowMs: WINDOW });
+    tracker.gamesToSweep([1, 2], { now: T0 });
+    tracker.gamesToSweep([1], { now: T0 + MIN });
+    const json = tracker.toJSON();
+    delete json.recentlyEnded;
+
+    const restored = GameTracker.fromSnapshot(json, {
+      maxAgeMs: 4 * 3600 * 1000,
+      sweepWindowMs: WINDOW,
+      now: T0 + 2 * MIN,
+    });
+    // Old snapshot shape: game 2's end was already reported once, and with
+    // no recently-ended data there is nothing left to re-sweep.
+    assert.deepEqual(restored.gamesToSweep([1], { now: T0 + 2 * MIN }), []);
+  });
+});

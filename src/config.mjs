@@ -59,6 +59,7 @@ export function loadConfig(env = process.env) {
     maxUpdates: num('MAX_UPDATES', 2),
     apiBaseUrl: env.NHL_API_BASE_URL || 'https://api-web.nhle.com/v1',
     scoreMaxAgeMs: num('SCORE_MAX_AGE_MS', 4 * 60 * 60 * 1000),
+    sweepWindowMs: num('SWEEP_WINDOW_MS', 20 * 60 * 1000),
     storePath: env.GOAL_STORE_PATH || './data/posted-goals.json',
     port: num('PORT', 10_000),
   };
