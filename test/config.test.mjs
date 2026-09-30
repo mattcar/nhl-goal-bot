@@ -13,6 +13,7 @@ describe('loadConfig', () => {
     assert.equal(config.blueskyIdentifier, 'nhl-goal-bot.bsky.social');
     assert.equal(config.pollIntervalMs, 45_000);
     assert.equal(config.maxUpdates, 2);
+    assert.equal(config.sweepWindowMs, 20 * 60 * 1000);
     assert.equal(config.port, 10_000);
   });
 
