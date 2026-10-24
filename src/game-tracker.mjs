@@ -67,6 +67,18 @@ export class GameTracker {
     return targets;
   }
 
+  /**
+   * Game ids whose goal records must survive a prune: games still live,
+   * plus games that ended recently and are still inside their re-sweep
+   * window. A game that ended just before an ET midnight has already
+   * left the live set, but pruning its records makes the next sweep
+   * repost every goal as new (2026-10-23 TBL-COL incident: all 9 goals
+   * reposted in one burst at 12:01 AM ET).
+   */
+  protectedGameIds() {
+    return [...this.recentlyLive, ...this.recentlyEnded.keys()];
+  }
+
   /** Serializable snapshot of the live set, for the durable store. */
   toJSON() {
     return {

@@ -185,3 +185,37 @@ describe('GameTracker re-sweeps', () => {
     assert.deepEqual(restored.gamesToSweep([1], { now: T0 + 2 * MIN }), []);
   });
 });
+
+describe('GameTracker protectedGameIds', () => {
+  const MIN = 60_000;
+  const T0 = new Date('2026-09-30T01:00:00-04:00').getTime();
+  const WINDOW = 20 * MIN;
+
+  it('includes live games and recently ended games', () => {
+    const tracker = new GameTracker({ sweepWindowMs: WINDOW });
+    tracker.gamesToSweep([1, 2], { now: T0 });
+    tracker.gamesToSweep([1], { now: T0 + MIN });
+    // Game 1 still live, game 2 ended a minute ago and is still sweepable.
+    assert.deepEqual(new Set(tracker.protectedGameIds()), new Set([1, 2]));
+  });
+
+  it('keeps a game that ended just before ET midnight protected (2026-10-23 dup regression)', () => {
+    const tracker = new GameTracker({ sweepWindowMs: WINDOW });
+    tracker.gamesToSweep([1, 2], { now: T0 });
+    // Game 2 ends minutes before the ET midnight prune runs.
+    tracker.gamesToSweep([1], { now: T0 + MIN });
+    // It left the live set, but its records must survive the prune or the
+    // next sweep reposts every goal as new.
+    assert.ok(tracker.protectedGameIds().includes(2));
+  });
+
+  it('drops games whose sweep window expired', () => {
+    const tracker = new GameTracker({ sweepWindowMs: WINDOW });
+    tracker.gamesToSweep([1, 2], { now: T0 });
+    // Poll while game 2 is still missing from the live list so its end is
+    // stamped, then poll again after the window expires.
+    tracker.gamesToSweep([1], { now: T0 + MIN });
+    tracker.gamesToSweep([1], { now: T0 + 22 * MIN });
+    assert.deepEqual(tracker.protectedGameIds(), [1]);
+  });
+});

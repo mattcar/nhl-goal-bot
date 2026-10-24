@@ -285,8 +285,11 @@ async function main() {
         lastDay = today;
         // Games seen live on the previous poll may still be in progress
         // across the ET midnight boundary — never prune their records, or
-        // the next poll reposts every goal as new.
-        const removed = pruneOldGoals(store, config, gameTracker.recentlyLive);
+        // the next poll reposts every goal as new. The same holds for
+        // games that ended just before midnight: they left the live set
+        // but are still inside their re-sweep window, and pruning their
+        // records makes the sweep repost every goal (2026-10-23 TBL-COL).
+        const removed = pruneOldGoals(store, config, gameTracker.protectedGameIds());
         await store.save();
         log(`New ET day, pruned ${removed} old goal record(s)`);
       }
