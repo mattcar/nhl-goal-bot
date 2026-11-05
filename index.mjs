@@ -97,45 +97,6 @@ async function main() {
   });
   health.state = 'ready';
 
-  if (store.size === 0) {
-    // Cold start: the disk may have been wiped (or this is a first deploy).
-    // Rebuild "already posted" state from our own Bluesky feed so a restart
-    // mid-game doesn't repost every goal.
-    log('Goal store is empty, attempting backfill from Bluesky feed');
-    try {
-      const seeded = await seedStoreFromFeed({
-        store,
-        actor: config.blueskyIdentifier,
-        getGames: async () => {
-          const games = [];
-          const schedule = await nhl.getSchedule();
-          for (const gameId of nhl.liveGameIds(schedule)) {
-            try {
-              const pbp = await nhl.getPlayByPlay(gameId);
-              games.push({
-                gameId,
-                teams: { away: pbp.awayTeam.abbrev, home: pbp.homeTeam.abbrev },
-                goals: extractGoals(pbp),
-              });
-            } catch (err) {
-              log(`Backfill: skipping game ${gameId}: ${err.message}`);
-            }
-          }
-          return games;
-        },
-      });
-      if (seeded > 0) await store.save();
-      log(`Backfill complete, marked ${seeded} goal(s) as posted`);
-    } catch (err) {
-      log(`Backfill failed, continuing with empty store: ${err.message}`);
-    }
-  }
-
-  log('Logged in to Bluesky');
-
-  /** Goal keys currently being handled; the poll loop never awaits these. */
-  const inFlight = new Set();
-
   /**
    * Games seen LIVE, so just-ended games get a final sweep — re-run for a
    * while afterwards in case the NHL API is slow to record last-second
@@ -143,6 +104,9 @@ async function main() {
    * exactly on a game ending doesn't skip that game's final sweep. Stale
    * snapshots (long downtime) are discarded by fromSnapshot — sweeping
    * those games could repost goals whose records were already pruned.
+   *
+   * Restored before the feed reconciliation below, so recently-ended games
+   * are covered by it too.
    */
   const gameTracker = GameTracker.fromSnapshot(store.getMeta('gameTracker'), {
     maxAgeMs: config.scoreMaxAgeMs,
@@ -151,6 +115,50 @@ async function main() {
   if (gameTracker.recentlyLive.size > 0) {
     log('Restored game tracker live set', [...gameTracker.recentlyLive]);
   }
+
+  // Reconcile the store against our own Bluesky feed on every startup, not
+  // just on a cold start. A restart (or a deploy overlap) can leave a goal
+  // in the store as unposted even though it was already posted — the
+  // post-save never landed on disk — and the next poll would post it
+  // again. The feed is the source of truth for what was posted, so any
+  // unposted record that matches a feed post is marked posted here.
+  // (2026-11-04 CHI-FLA Kantserov goal: posted twice 2 minutes apart.)
+  log('Reconciling goal store against Bluesky feed');
+  try {
+    const seeded = await seedStoreFromFeed({
+      store,
+      actor: config.blueskyIdentifier,
+      getGames: async () => {
+        const games = [];
+        const schedule = await nhl.getSchedule();
+        const gameIds = [
+          ...new Set([...nhl.liveGameIds(schedule), ...gameTracker.recentlyEnded.keys()]),
+        ];
+        for (const gameId of gameIds) {
+          try {
+            const pbp = await nhl.getPlayByPlay(gameId);
+            games.push({
+              gameId,
+              teams: { away: pbp.awayTeam.abbrev, home: pbp.homeTeam.abbrev },
+              goals: extractGoals(pbp),
+            });
+          } catch (err) {
+            log(`Backfill: skipping game ${gameId}: ${err.message}`);
+          }
+        }
+        return games;
+      },
+    });
+    if (seeded > 0) await store.save();
+    log(`Backfill complete, marked ${seeded} goal(s) as posted`);
+  } catch (err) {
+    log(`Backfill failed, continuing: ${err.message}`);
+  }
+
+  log('Logged in to Bluesky');
+
+  /** Goal keys currently being handled; the poll loop never awaits these. */
+  const inFlight = new Set();
 
   /** Exact key hit, else a fuzzy match for a re-issued event id. */
   function findRecord(gameId, goal) {

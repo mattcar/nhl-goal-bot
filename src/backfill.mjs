@@ -54,10 +54,15 @@ export function parseGoalPost(text) {
 
 /**
  * Mark goals in currently-live games as posted when they match a recent feed
- * post. `store` needs has/set; `getGames()` resolves to
+ * post. `store` needs has/set/get; `getGames()` resolves to
  * [{ gameId, teams: { away, home }, goals: [...] }].
  * Returns the number of goals seeded. Never throws for parse/match issues —
  * worst case it seeds nothing and the caller continues with an empty store.
+ *
+ * Goals already in the store as posted are left alone. Goals in the store
+ * as unposted that match a feed post are upgraded to posted: that is the
+ * restart case, where the goal was posted but the post-save never landed
+ * on disk, so a fresh process would otherwise post it again.
  */
 export async function seedStoreFromFeed({ store, actor, getGames, fetchFn = fetch }) {
   const parsed = (await fetchRecentPosts(actor, fetchFn)).map(parseGoalPost).filter(Boolean);
@@ -67,14 +72,21 @@ export async function seedStoreFromFeed({ store, actor, getGames, fetchFn = fetc
   for (const game of await getGames()) {
     for (const goal of game.goals) {
       const key = goalKey(game.gameId, goal);
-      if (store.has(key)) continue;
+      const existing = store.get(key);
+      if (existing?.posted) continue;
       const match = parsed.some(
         (p) => p.away === game.teams.away && p.home === game.teams.home && isSameGoal(goal, p),
       );
-      if (match) {
+      if (!match) continue;
+      if (existing) {
+        // Already seen but still marked unposted, and the feed proves it
+        // was posted. Mark it posted instead of posting it again.
+        existing.posted = true;
+        existing.timestamp = now;
+      } else {
         store.set(key, { goal, posted: true, updateCount: 0, firstSeen: now, timestamp: now });
-        seeded += 1;
       }
+      seeded += 1;
     }
   }
   return seeded;
