@@ -147,9 +147,42 @@ describe('seedStoreFromFeed', () => {
     assert.equal(seeded, 0);
   });
 
-  it('does not overwrite goals already in the store', async () => {
+  it('marks an existing unposted record as posted when it matches a feed post', async () => {
     const store = makeStore();
-    store.set('2026020011:101', { posted: false, sentinel: true });
+    store.set('2026020011:101', {
+      goal: goal(101, 'Arttu Hyry (#25)', '00:16'),
+      posted: false,
+      updateCount: 0,
+      sentinel: true,
+    });
+    const getGames = async () => [
+      {
+        gameId: 2026020011,
+        teams: { away: 'DAL', home: 'STL' },
+        goals: [goal(101, 'Arttu Hyry (#25)', '00:16')],
+      },
+    ];
+    const posted = `GOAL! 🚨\nDAL vs. STL\nArttu Hyry (#25) (DAL) is the scorer!\nTime: 00:16 - 1\nScore: 1 - 0`;
+    const seeded = await seedStoreFromFeed({
+      store,
+      actor: 'nhl-goal-bot.bsky.social',
+      getGames,
+      fetchFn: feedWith([posted]),
+    });
+    assert.equal(seeded, 1);
+    const record = store.get('2026020011:101');
+    assert.equal(record.posted, true);
+    assert.equal(record.sentinel, true);
+  });
+
+  it('leaves already-posted records alone', async () => {
+    const store = makeStore();
+    store.set('2026020011:101', {
+      goal: goal(101, 'Arttu Hyry (#25)', '00:16'),
+      posted: true,
+      updateCount: 1,
+      sentinel: true,
+    });
     const getGames = async () => [
       {
         gameId: 2026020011,
@@ -165,6 +198,33 @@ describe('seedStoreFromFeed', () => {
       fetchFn: feedWith([posted]),
     });
     assert.equal(seeded, 0);
-    assert.equal(store.get('2026020011:101').sentinel, true);
+    const record = store.get('2026020011:101');
+    assert.equal(record.posted, true);
+    assert.equal(record.updateCount, 1);
+    assert.equal(record.sentinel, true);
+  });
+
+  it('leaves an unposted record alone when nothing in the feed matches it', async () => {
+    const store = makeStore();
+    store.set('2026020011:101', {
+      goal: goal(101, 'Arttu Hyry (#25)', '00:16'),
+      posted: false,
+      updateCount: 0,
+    });
+    const getGames = async () => [
+      {
+        gameId: 2026020011,
+        teams: { away: 'DAL', home: 'STL' },
+        goals: [goal(101, 'Arttu Hyry (#25)', '00:16')],
+      },
+    ];
+    const seeded = await seedStoreFromFeed({
+      store,
+      actor: 'nhl-goal-bot.bsky.social',
+      getGames,
+      fetchFn: feedWith(['hello world']),
+    });
+    assert.equal(seeded, 0);
+    assert.equal(store.get('2026020011:101').posted, false);
   });
 });
